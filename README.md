@@ -4,7 +4,7 @@ DeepReader is a document intelligence and RAG workbench project for turning long
 
 ## Current v0.1 Scope
 
-This milestone is backend only. It implements deterministic text and EPUB ingestion, paragraph records, SQLite persistence, and BM25 search over preserved source text.
+This milestone includes a working FastAPI backend and a minimal React dashboard. It is focused on deterministic ingestion, preserved source records, SQLite persistence, and inspectable BM25 retrieval.
 
 In scope:
 
@@ -15,7 +15,8 @@ In scope:
 - paragraph chunking on blank lines
 - inspectable BM25 source-text search
 - FastAPI document and search endpoints
-- meaningful pytest coverage
+- minimal React/Vite/TypeScript dashboard
+- meaningful backend pytest coverage
 
 Out of scope for v0.1:
 
@@ -24,7 +25,6 @@ Out of scope for v0.1:
 - generated answers or summaries
 - question answering
 - citation inspection
-- frontend dashboard
 - Docker polish
 
 ## Backend Quickstart
@@ -47,6 +47,51 @@ make backend-dev
 
 The local API runs at `http://127.0.0.1:8000`.
 
+## Frontend Quickstart
+
+In a second terminal, install and start the dashboard:
+
+```bash
+cd frontend
+npm install
+npm run dev
+```
+
+The local dashboard runs at `http://127.0.0.1:5173` and defaults to `http://127.0.0.1:8000` for the backend API.
+
+To override the API URL:
+
+```bash
+cd frontend
+cp .env.example .env
+```
+
+Then edit `VITE_API_BASE_URL`.
+
+The root Makefile also includes:
+
+```bash
+make frontend-install
+make frontend-dev
+make frontend-build
+```
+
+## Running Backend And Frontend Together
+
+Terminal 1:
+
+```bash
+make backend-dev
+```
+
+Terminal 2:
+
+```bash
+make frontend-dev
+```
+
+The backend allows local CORS requests from `http://127.0.0.1:5173` and `http://localhost:5173` by default. Override `DEEPREADER_CORS_ORIGINS` with a comma-separated list if your local frontend origin differs.
+
 ## Ingest An Example Text File
 
 ```bash
@@ -60,6 +105,8 @@ From inside `backend/`, use:
 curl -X POST "http://127.0.0.1:8000/documents/ingest/text" \
   -F "file=@../examples/simple_manual.txt"
 ```
+
+After ingesting, refresh the dashboard document list.
 
 ## Search
 
@@ -77,6 +124,8 @@ curl -X POST "http://127.0.0.1:8000/search" \
   -d '{"query":"bearing wear","document_id":1,"limit":10}'
 ```
 
+The dashboard exposes the same search path and shows scores, stable IDs, retrieval method, source text, `summary: null`, and metadata for each result.
+
 ## API Endpoints
 
 - `POST /documents/ingest/text`
@@ -88,17 +137,26 @@ curl -X POST "http://127.0.0.1:8000/search" \
 
 Search results expose `record_id`, `stable_id`, `score`, `retrieval_method`, `source_text`, `summary: null`, and record metadata.
 
-## Tests
+## Tests And Builds
+
+Backend tests:
 
 ```bash
 make test
 ```
 
-The tests cover text ingestion, EPUB ingestion, stable IDs, paragraph chunking, BM25 ranking, document APIs, search APIs, and upload safety.
+Frontend production build:
+
+```bash
+cd frontend
+npm run build
+```
+
+The backend tests cover text ingestion, EPUB ingestion, stable IDs, paragraph chunking, BM25 ranking, document APIs, search APIs, CORS, and upload safety.
 
 ## Configuration
 
-Copy `.env.example` if you want to override local defaults:
+Copy `.env.example` if you want to override backend local defaults:
 
 ```bash
 cp .env.example .env
@@ -112,10 +170,11 @@ The default database URL is `sqlite:///./data/deepreader.sqlite3`. Uploaded file
 - EPUB extraction focuses on readable HTML document items.
 - BM25 searches exact source text tokens and does not use embeddings.
 - `summary` is intentionally always `null`.
-- No frontend is included in v0.1.
+- The dashboard does not upload documents yet; use the API ingest endpoints.
+- The dashboard is a local development UI, not a deployed product shell.
 
 ## Roadmap
 
-v0.2 should add richer document formats, retrieval inspection, and better ingestion observability.
+v0.2 should add richer document formats, retrieval inspection refinements, and better ingestion observability.
 
-v0.3 can introduce embeddings, hybrid retrieval, answer generation, citations, and a frontend once the backend slice is stable.
+v0.3 can introduce embeddings, hybrid retrieval, answer generation, citations, and broader product workflows once the v0.1 system is stable.

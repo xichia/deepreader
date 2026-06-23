@@ -24,3 +24,12 @@ backend/.venv/
 backend/data/*.sqlite3
 backend/data/*.db
 backend/data/uploads/
+
+# Frontend generated files
+.pnpm-store/
+frontend/node_modules/
+frontend/dist/
+frontend/.env
+frontend/.env.local
+frontend/.env.development.local
+frontend/.env.production.local
