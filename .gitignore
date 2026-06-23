@@ -1,1 +1,26 @@
 .DS_Store
+.env
+.venv/
+__pycache__/
+*.py[cod]
+.pytest_cache/
+.ruff_cache/
+*.egg-info/
+backend/data/
+*.sqlite
+*.sqlite3
+
+# Python generated files
+__pycache__/
+*.py[cod]
+.pytest_cache/
+*.egg-info/
+
+# Local Python environments
+.venv/
+backend/.venv/
+
+# Local runtime data
+backend/data/*.sqlite3
+backend/data/*.db
+backend/data/uploads/
