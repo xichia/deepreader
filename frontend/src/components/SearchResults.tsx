@@ -38,9 +38,18 @@ function SearchResults({ response, isLoading }: SearchResultsProps) {
               </div>
               <div>
                 <dt>summary</dt>
-                <dd>{String(result.summary)}</dd>
+                <dd>{result.summary ?? "null"}</dd>
               </div>
             </dl>
+            {result.summary ? (
+              <div className="summary-box">
+                <div className="text-label">matched summary</div>
+                <p>{result.summary}</p>
+              </div>
+            ) : null}
+            {Object.keys(result.component_scores).length ? (
+              <pre className="metadata-block">{JSON.stringify(result.component_scores, null, 2)}</pre>
+            ) : null}
             <p className="source-text">{result.source_text}</p>
             <pre className="metadata-block">{JSON.stringify(result.metadata, null, 2)}</pre>
           </div>

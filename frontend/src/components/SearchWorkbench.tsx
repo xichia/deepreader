@@ -15,6 +15,10 @@ function SearchWorkbench({ documents, selectedDocumentId }: SearchWorkbenchProps
   const [query, setQuery] = useState("");
   const [limit, setLimit] = useState(5);
   const [scope, setScope] = useState<SearchScope>("all");
+  const [searchSourceText, setSearchSourceText] = useState(true);
+  const [searchSummaries, setSearchSummaries] = useState(false);
+  const [useLocalVector, setUseLocalVector] = useState(false);
+  const [useFusion, setUseFusion] = useState(false);
   const [response, setResponse] = useState<SearchResponse | null>(null);
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -30,6 +34,10 @@ function SearchWorkbench({ documents, selectedDocumentId }: SearchWorkbenchProps
       setError("Enter a search query.");
       return;
     }
+    if (!searchSourceText && !searchSummaries) {
+      setError("Search source text, summaries, or both.");
+      return;
+    }
 
     setIsLoading(true);
     setError(null);
@@ -39,6 +47,10 @@ function SearchWorkbench({ documents, selectedDocumentId }: SearchWorkbenchProps
         query: trimmedQuery,
         document_id: typeof scope === "number" ? scope : undefined,
         limit: boundedLimit,
+        search_source_text: searchSourceText,
+        search_summaries: searchSummaries,
+        use_local_vector: useLocalVector,
+        use_fusion: useFusion,
       });
       setResponse(nextResponse);
     } catch (searchError) {
@@ -90,12 +102,43 @@ function SearchWorkbench({ documents, selectedDocumentId }: SearchWorkbenchProps
           <label>
             Limit
             <input
-            type="number"
-            min="1"
-            max="50"
-            value={limit}
+              type="number"
+              min="1"
+              max="50"
+              value={limit}
               onChange={(event) => setLimit(Number(event.target.value))}
             />
+          </label>
+        </div>
+
+        <div className="checkbox-row">
+          <label>
+            <input
+              type="checkbox"
+              checked={searchSourceText}
+              onChange={(event) => setSearchSourceText(event.target.checked)}
+            />
+            Source text
+          </label>
+          <label>
+            <input
+              type="checkbox"
+              checked={searchSummaries}
+              onChange={(event) => setSearchSummaries(event.target.checked)}
+            />
+            Summaries
+          </label>
+          <label>
+            <input
+              type="checkbox"
+              checked={useLocalVector}
+              onChange={(event) => setUseLocalVector(event.target.checked)}
+            />
+            Local vector
+          </label>
+          <label>
+            <input type="checkbox" checked={useFusion} onChange={(event) => setUseFusion(event.target.checked)} />
+            Fusion
           </label>
         </div>
 

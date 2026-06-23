@@ -6,48 +6,51 @@ Build it as a reliable engineering system, not a generic chatbot or beginner AI 
 
 ## Current milestone
 
-The v0.1 backend is implemented and tested.
+The v0.1 backend/frontend slice is complete.
 
-The current milestone is a minimal v0.1 frontend dashboard that consumes the real backend API.
+The v0.2 processing pipeline is implemented in the working tree: uploads, jobs, job steps, deterministic local summaries, checkpointing, summary-aware BM25 search, and frontend summary/job panels.
+
+The current milestone is v0.3 retrieval, citations, and QA workbench.
 
 Read:
 
+- README.md
 - docs/V0.1_ACCEPTANCE.md
 - examples/README.md
-- README.md
-- backend/src/deepreader/api/main.py
-- backend/src/deepreader/api/routes_documents.py
-- backend/src/deepreader/api/routes_search.py
+- backend/src/deepreader
+- frontend/src
+- backend/tests
 
 ## Allowed in this milestone
 
-Add a minimal React/Vite/TypeScript frontend.
+Add v0.3 retrieval and QA features:
 
-The frontend should consume the real FastAPI backend API.
+- retrieval result abstractions
+- BM25 over source text and summaries
+- deterministic local vector-style retrieval over source text and summaries
+- simple score normalisation and fusion
+- evidence packets
+- stable-ID citation mapping
+- deterministic local extractive QA
+- persisted answers and answer citations
+- frontend QA/citation inspection workbench
 
-It should support:
-
-- listing documents
-- viewing document records
-- running search queries
-- inspecting ranked chunks
-- showing stable IDs, scores, source text, summaries, and metadata
+The project must continue to work locally with no API keys.
 
 ## Do not overbuild
 
-Do not implement v0.2 or v0.3 features yet.
-
 Do not add:
 
-- LLM calls
-- embeddings
-- hybrid retrieval
-- question answering
-- generated answers
-- citation inspector
+- real external LLM providers
+- OpenAI, Gemini, Anthropic, or paid API calls
+- required API keys
+- production async worker infrastructure
+- authentication
+- multi-user permissions
+- cloud deployment
 - Docker polish
 
-Do not mock the backend API unless only used as a fallback error state. The dashboard should consume the real backend.
+Do not mock core backend behaviour. The dashboard should consume the real FastAPI backend.
 
 ## Package defaults
 
@@ -61,20 +64,24 @@ Frontend:
 
 Backend:
 
-- Keep the current FastAPI backend working.
-- Do not rewrite the backend unless required for frontend integration.
-- Small CORS changes are acceptable if needed for local frontend development.
+- Keep existing FastAPI backend functionality working.
+- Keep v0.1 ingestion/search and v0.2 summary/job behaviour passing.
+- Use deterministic local retrieval and answer generation by default.
+- Provider interfaces may exist for future LLM support, but real external calls must not be required.
 
 ## Engineering priorities
 
 Prioritise:
 
-- clean API integration
-- readable components
-- clear loading and error states
-- inspectable search results
+- deterministic stable IDs and hashes
+- clean SQLite persistence
+- inspectable retrieval methods and component scores
+- evidence packets that map back to original source records
+- citations that never cite summaries alone
+- source text preservation
+- meaningful tests
 - simple professional UI
-- no fake AI features
+- no fake AI claims
 - no hidden retrieval behaviour
 
 Avoid:
@@ -82,4 +89,4 @@ Avoid:
 - unnecessary abstractions
 - advanced styling before behaviour works
 - mocked core backend behaviour
-- committed secrets
+- committed secrets or generated artifacts

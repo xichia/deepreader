@@ -7,8 +7,11 @@ import os
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
+from deepreader.api.routes_jobs import router as jobs_router
 from deepreader.api.routes_documents import router as documents_router
+from deepreader.api.routes_qa import router as qa_router
 from deepreader.api.routes_search import router as search_router
+from deepreader.api.routes_summaries import router as summaries_router
 from deepreader.api.upload_safety import get_max_upload_bytes
 from deepreader.storage.db import build_engine, build_session_factory, init_db
 
@@ -26,7 +29,7 @@ def get_cors_origins() -> list[str]:
 
 
 def create_app(database_url: str | None = None, upload_max_bytes: int | None = None) -> FastAPI:
-    app = FastAPI(title="DeepReader Backend", version="0.1.0")
+    app = FastAPI(title="DeepReader Backend", version="0.3.0")
 
     cors_origins = get_cors_origins()
     if cors_origins:
@@ -45,7 +48,10 @@ def create_app(database_url: str | None = None, upload_max_bytes: int | None = N
     app.state.upload_max_bytes = upload_max_bytes or get_max_upload_bytes()
 
     app.include_router(documents_router)
+    app.include_router(summaries_router)
     app.include_router(search_router)
+    app.include_router(jobs_router)
+    app.include_router(qa_router)
 
     return app
 

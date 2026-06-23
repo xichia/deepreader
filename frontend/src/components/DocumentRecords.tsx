@@ -1,13 +1,30 @@
-import type { DocumentRecord, DocumentSummary } from "../types";
+import { useMemo } from "react";
+
+import type { DocumentRecord, DocumentSummary, RecordSummary } from "../types";
 
 type DocumentRecordsProps = {
   document: DocumentSummary | null;
   records: DocumentRecord[];
+  summaries: RecordSummary[];
   isLoading: boolean;
+  isSummarising: boolean;
   error: string | null;
+  onGenerateSummaries: () => void;
 };
 
-function DocumentRecords({ document, records, isLoading, error }: DocumentRecordsProps) {
+function DocumentRecords({
+  document,
+  records,
+  summaries,
+  isLoading,
+  isSummarising,
+  error,
+  onGenerateSummaries,
+}: DocumentRecordsProps) {
+  const summariesByRecordId = useMemo(() => {
+    return new Map(summaries.map((summary) => [summary.record_id, summary]));
+  }, [summaries]);
+
   return (
     <section className="panel records-panel" aria-labelledby="records-heading">
       <div className="panel-header">
@@ -15,7 +32,19 @@ function DocumentRecords({ document, records, isLoading, error }: DocumentRecord
           <p className="panel-kicker">Records</p>
           <h2 id="records-heading">{document ? document.title : "Select a document"}</h2>
         </div>
-        <div className="count-pill">{records.length} records</div>
+        <div className="record-actions">
+          <div className="count-pill">
+            {records.length} records / {summaries.length} summaries
+          </div>
+          <button
+            className="secondary-button"
+            type="button"
+            onClick={onGenerateSummaries}
+            disabled={!document || isSummarising}
+          >
+            {isSummarising ? "Summarising" : "Generate summaries"}
+          </button>
+        </div>
       </div>
 
       {error ? <p className="error-message">{error}</p> : null}
@@ -24,16 +53,31 @@ function DocumentRecords({ document, records, isLoading, error }: DocumentRecord
       {document && !isLoading && records.length === 0 ? <p className="muted">No records found.</p> : null}
 
       <div className="record-list">
-        {records.map((record) => (
-          <article className="record-card" key={record.id}>
-            <div className="record-toolbar">
-              <code>{record.stable_id}</code>
-              <span>order {record.order_index}</span>
-            </div>
-            {record.section_title ? <h3>{record.section_title}</h3> : null}
-            <p className="source-text">{record.source_text}</p>
-          </article>
-        ))}
+        {records.map((record) => {
+          const summary = summariesByRecordId.get(record.id);
+          return (
+            <article className="record-card" key={record.id}>
+              <div className="record-toolbar">
+                <code>{record.stable_id}</code>
+                <span>order {record.order_index}</span>
+              </div>
+              {record.section_title ? <h3>{record.section_title}</h3> : null}
+              {summary ? (
+                <div className="summary-box">
+                  <div className="text-label">summary</div>
+                  <p>{summary.summary_text}</p>
+                  <code>{summary.summariser_name}</code>
+                </div>
+              ) : (
+                <p className="inline-note">No current summary</p>
+              )}
+              <div className="source-box">
+                <div className="text-label">source text</div>
+                <p className="source-text">{record.source_text}</p>
+              </div>
+            </article>
+          );
+        })}
       </div>
     </section>
   );
