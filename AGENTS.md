@@ -6,14 +6,32 @@ Build it as a reliable engineering system, not a generic chatbot or beginner AI 
 
 ## Current milestone
 
-The current milestone is v0.1 backend only.
+The v0.1 backend is implemented and tested.
+
+The current milestone is a minimal v0.1 frontend dashboard that consumes the real backend API.
 
 Read:
 
 - docs/V0.1_ACCEPTANCE.md
 - examples/README.md
-- examples/simple_manual.txt
-- examples/troubleshooting_log.txt
+- README.md
+- backend/src/deepreader/api/main.py
+- backend/src/deepreader/api/routes_documents.py
+- backend/src/deepreader/api/routes_search.py
+
+## Allowed in this milestone
+
+Add a minimal React/Vite/TypeScript frontend.
+
+The frontend should consume the real FastAPI backend API.
+
+It should support:
+
+- listing documents
+- viewing document records
+- running search queries
+- inspecting ranked chunks
+- showing stable IDs, scores, source text, summaries, and metadata
 
 ## Do not overbuild
 
@@ -27,48 +45,41 @@ Do not add:
 - question answering
 - generated answers
 - citation inspector
-- frontend dashboard
 - Docker polish
 
-Focus only on v0.1 backend acceptance criteria and tests.
+Do not mock the backend API unless only used as a fallback error state. The dashboard should consume the real backend.
 
 ## Package defaults
 
+Frontend:
+
+- Vite
+- React
+- TypeScript
+- plain CSS or simple CSS modules
+- no heavy UI framework unless already justified
+
 Backend:
 
-- Python 3.11+
-- FastAPI
-- SQLAlchemy 2.x
-- Pydantic
-- pytest
-- httpx
-- ebooklib
-- beautifulsoup4
-- rank-bm25 or a simple internal BM25 implementation
-
-Dev:
-
-- Makefile
-- .env.example
-- SQLite local default
+- Keep the current FastAPI backend working.
+- Do not rewrite the backend unless required for frontend integration.
+- Small CORS changes are acceptable if needed for local frontend development.
 
 ## Engineering priorities
 
 Prioritise:
 
-- deterministic stable IDs
-- clean SQLite persistence
-- inspectable BM25 search
-- source text preservation
-- small composable modules
-- meaningful tests
-- safe file handling
-- clear README instructions
+- clean API integration
+- readable components
+- clear loading and error states
+- inspectable search results
+- simple professional UI
+- no fake AI features
+- no hidden retrieval behaviour
 
 Avoid:
 
-- opaque AI features
-- hidden retrieval behaviour
 - unnecessary abstractions
+- advanced styling before behaviour works
 - mocked core backend behaviour
 - committed secrets
