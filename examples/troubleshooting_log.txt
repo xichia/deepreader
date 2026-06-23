@@ -1,0 +1,65 @@
+# Cooling Pump Troubleshooting Log
+
+## Incident 001
+
+Date: 2026-02-14
+Machine: Mill Line 3
+Alarm: A12 low flow
+
+The operator reported repeated low-flow alarms during morning startup. Inlet pressure was 205 kPa and outlet flow was 21 litres per minute.
+
+The maintenance technician inspected the outlet valve and confirmed it was fully open.
+
+The filter cartridge was removed and found to contain metal fines and coolant residue. The filter was replaced.
+
+After replacement, outlet flow returned to 42 litres per minute and the alarm cleared.
+
+Root cause: blocked filter cartridge.
+
+## Incident 002
+
+Date: 2026-03-03
+Machine: Mill Line 2
+Alarm: A18 high motor current
+
+The pump motor current increased to 8.4 amps during continuous operation. Flow remained within normal range at 40 litres per minute.
+
+The filter was inspected and was not blocked. Coolant viscosity was within specification.
+
+The motor housing produced an irregular vibration. Bearing wear was suspected.
+
+The pump was taken offline and the bearing assembly was replaced.
+
+Root cause: bearing wear.
+
+## Incident 003
+
+Date: 2026-03-19
+Machine: Mill Line 1
+Alarm: A21 high coolant temperature
+
+Coolant temperature rose to 51 degrees Celsius during peak load. Flow was 43 litres per minute and motor current was 6.9 amps.
+
+Because flow and motor current were normal, the pump was not considered the primary fault.
+
+The heat exchanger was inspected and fouling was found on the coolant side.
+
+The heat exchanger was cleaned and coolant temperature returned to 39 degrees Celsius under standard load.
+
+Root cause: heat exchanger fouling.
+
+## Incident 004
+
+Date: 2026-04-07
+Machine: Mill Line 3
+Alarm: A12 low flow
+
+The controller recorded inlet pressure of 95 kPa and outlet flow of 18 litres per minute.
+
+The filter cartridge was clean. The outlet valve was open.
+
+The coolant reservoir was below the minimum fill line and air was present in the suction line.
+
+The reservoir was refilled and the pump was primed.
+
+Root cause: low coolant level and air in suction line.

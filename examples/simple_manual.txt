@@ -1,0 +1,59 @@
+# Cooling Pump Maintenance Manual
+
+## 1. System Overview
+
+The CP-200 cooling pump circulates coolant through the primary heat exchanger. Its purpose is to maintain stable operating temperature during continuous machine operation.
+
+The pump assembly includes an inlet valve, outlet valve, motor housing, pressure sensor, flow sensor, and removable filter cartridge.
+
+The control system monitors pressure, flow rate, motor current, and coolant temperature. If any value moves outside the configured safety band, the controller raises an alarm.
+
+## 2. Normal Operating Range
+
+During normal operation, inlet pressure should remain between 180 and 220 kPa.
+
+Outlet flow should remain between 38 and 45 litres per minute.
+
+Coolant temperature should remain below 42 degrees Celsius during standard load and below 48 degrees Celsius during temporary peak load.
+
+Motor current should remain below 7.5 amps. A sustained current above this value may indicate filter blockage, bearing wear, or increased mechanical resistance.
+
+## 3. Startup Procedure
+
+Before startup, confirm that the inlet valve is open and the outlet valve is partially open.
+
+Check that the filter cartridge is seated correctly and that the filter cover is locked.
+
+Start the pump from the control panel and observe pressure for thirty seconds.
+
+If pressure rises rapidly but flow remains low, stop the pump and inspect the outlet valve and filter cartridge.
+
+If pressure remains low and flow remains low, inspect the inlet valve, coolant reservoir level, and suction line.
+
+## 4. Alarm Conditions
+
+Alarm A12 indicates low flow. The most common causes are a blocked filter, closed outlet valve, failed flow sensor, or air trapped in the line.
+
+Alarm A18 indicates high motor current. The most common causes are filter blockage, worn bearings, pump impeller damage, or incorrect coolant viscosity.
+
+Alarm A21 indicates high coolant temperature. The most common causes are insufficient flow, heat exchanger fouling, or operation above rated load.
+
+## 5. Maintenance Schedule
+
+Inspect the filter cartridge every 250 operating hours.
+
+Replace the filter cartridge every 1,000 operating hours or sooner if repeated low-flow alarms occur.
+
+Inspect the inlet and outlet valves every 500 operating hours.
+
+Record pressure, flow, coolant temperature, and motor current after each maintenance action.
+
+## 6. Troubleshooting Notes
+
+A low-flow alarm with high pressure usually indicates a downstream restriction.
+
+A low-flow alarm with low pressure usually indicates an upstream restriction, low coolant level, or pump priming issue.
+
+High motor current combined with falling flow may indicate mechanical resistance or severe filter blockage.
+
+High coolant temperature with normal flow may indicate heat exchanger fouling rather than pump failure.
