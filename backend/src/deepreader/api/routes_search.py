@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -9,17 +10,27 @@ from pydantic import BaseModel, Field
 from sqlalchemy.orm import Session
 
 from deepreader.api.routes_documents import get_session
-from deepreader.retrieval.bm25 import search_records
-from deepreader.storage.models import DocumentRecord
-from deepreader.storage.repositories import get_document, list_records_for_search, log_search_query
+from deepreader.retrieval.indexes import items_from_records, items_from_summaries, retrieve
+from deepreader.retrieval.schemas import RetrievalResult
+from deepreader.storage.repositories import (
+    get_document,
+    list_records_for_search,
+    list_summaries_for_search,
+    log_search_query,
+)
 
 router = APIRouter(tags=["search"])
+LOGGER = logging.getLogger(__name__)
 
 
 class SearchRequest(BaseModel):
     query: str = Field(min_length=1)
     document_id: int | None = None
     limit: int = Field(default=10, ge=1, le=50)
+    search_source_text: bool = True
+    search_summaries: bool = False
+    use_local_vector: bool = False
+    use_fusion: bool = False
 
 
 class SearchResultOut(BaseModel):
@@ -28,8 +39,9 @@ class SearchResultOut(BaseModel):
     score: float
     retrieval_method: str
     source_text: str
-    summary: None
+    summary: str | None
     metadata: dict[str, Any]
+    component_scores: dict[str, float] = Field(default_factory=dict)
 
 
 class SearchResponse(BaseModel):
@@ -37,15 +49,16 @@ class SearchResponse(BaseModel):
     results: list[SearchResultOut]
 
 
-def search_result_out(record: DocumentRecord, score: float) -> SearchResultOut:
+def search_result_out(result: RetrievalResult) -> SearchResultOut:
     return SearchResultOut(
-        record_id=record.id,
-        stable_id=record.stable_id,
-        score=score,
-        retrieval_method="bm25_source_text",
-        source_text=record.source_text,
-        summary=None,
-        metadata=record.metadata_json,
+        record_id=result.record_id,
+        stable_id=result.stable_id,
+        score=result.score,
+        retrieval_method=result.retrieval_method,
+        source_text=result.source_text,
+        summary=result.summary,
+        metadata=result.metadata,
+        component_scores=result.component_scores,
     )
 
 
@@ -53,12 +66,38 @@ def search_result_out(record: DocumentRecord, score: float) -> SearchResultOut:
 def search(request: SearchRequest, session: Session = Depends(get_session)) -> SearchResponse:
     if request.document_id is not None and get_document(session, request.document_id) is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Document not found.")
+    if not request.search_source_text and not request.search_summaries:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="At least one search target must be enabled.",
+        )
 
     records = list_records_for_search(session, request.document_id)
-    hits = search_records(request.query, records, limit=request.limit)
+    summaries = list_summaries_for_search(session, request.document_id) if request.search_summaries else []
+    retrieval_results = retrieve(
+        request.query,
+        source_items=items_from_records(records),
+        summary_items=items_from_summaries(summaries),
+        limit=request.limit,
+        use_source_text=request.search_source_text,
+        use_summaries=request.search_summaries,
+        use_bm25=True,
+        use_local_vector=request.use_local_vector,
+        use_fusion=request.use_fusion,
+    )
     log_search_query(session, request.query)
+    LOGGER.info(
+        "Search completed document_id=%s query_length=%s results=%s source=%s summaries=%s vector=%s fusion=%s",
+        request.document_id,
+        len(request.query),
+        len(retrieval_results),
+        request.search_source_text,
+        request.search_summaries,
+        request.use_local_vector,
+        request.use_fusion,
+    )
 
     return SearchResponse(
         query=request.query,
-        results=[search_result_out(hit.record, hit.score) for hit in hits],
+        results=[search_result_out(result) for result in retrieval_results],
     )

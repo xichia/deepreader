@@ -1,4 +1,4 @@
-NPM ?= npm
+NPM ?= pnpm
 
 .PHONY: test backend-dev install-dev frontend-install frontend-dev frontend-build
 

@@ -6,48 +6,54 @@ Build it as a reliable engineering system, not a generic chatbot or beginner AI 
 
 ## Current milestone
 
-The v0.1 backend is implemented and tested.
+The v0.1 backend/frontend slice is complete.
 
-The current milestone is a minimal v0.1 frontend dashboard that consumes the real backend API.
+The v0.2 processing pipeline is complete: uploads, jobs, job steps, deterministic local summaries, checkpointing, summary-aware BM25 search, and frontend summary/job panels.
+
+The v0.3 retrieval and QA workbench is complete: local vector-style retrieval, fusion, evidence packets, stable-ID citations, deterministic extractive QA, persisted answers, and frontend QA/citation inspection.
+
+The current milestone is v0.4 demo hardening, reviewer workflow, Docker, CI, and reliability polish.
 
 Read:
 
+- README.md
 - docs/V0.1_ACCEPTANCE.md
 - examples/README.md
-- README.md
-- backend/src/deepreader/api/main.py
-- backend/src/deepreader/api/routes_documents.py
-- backend/src/deepreader/api/routes_search.py
+- backend/src/deepreader
+- frontend/src
+- backend/tests
 
 ## Allowed in this milestone
 
-Add a minimal React/Vite/TypeScript frontend.
+Add v0.4 reliability and demo polish:
 
-The frontend should consume the real FastAPI backend API.
+- Docker Compose local demo support
+- reviewer demo documentation
+- frontend empty-state and workflow guidance
+- job detail inspection and local retry for failed summary steps
+- upload/security regression tests
+- API/schema consistency polish
+- lightweight backend logging and error handling
+- GitHub Actions CI
+- architecture and changelog documentation
 
-It should support:
-
-- listing documents
-- viewing document records
-- running search queries
-- inspecting ranked chunks
-- showing stable IDs, scores, source text, summaries, and metadata
+The project must continue to work locally with no API keys.
 
 ## Do not overbuild
 
-Do not implement v0.2 or v0.3 features yet.
-
 Do not add:
 
-- LLM calls
-- embeddings
-- hybrid retrieval
-- question answering
-- generated answers
-- citation inspector
-- Docker polish
+- new AI capabilities beyond hardening existing local behaviour
+- real external LLM providers
+- OpenAI, Gemini, Anthropic, or paid API calls
+- required API keys
+- authentication
+- multi-user permissions
+- cloud deployment
+- PostgreSQL or production infrastructure
+- Celery, Redis, or external worker infrastructure
 
-Do not mock the backend API unless only used as a fallback error state. The dashboard should consume the real backend.
+Do not mock core backend behaviour. The dashboard should consume the real FastAPI backend.
 
 ## Package defaults
 
@@ -61,25 +67,28 @@ Frontend:
 
 Backend:
 
-- Keep the current FastAPI backend working.
-- Do not rewrite the backend unless required for frontend integration.
-- Small CORS changes are acceptable if needed for local frontend development.
+- Keep existing FastAPI backend functionality working.
+- Keep v0.1 ingestion/search, v0.2 summary/job behaviour, and v0.3 retrieval/QA behaviour passing.
+- SQLite remains the local default.
+- Docker support should be simple and local-only.
 
 ## Engineering priorities
 
 Prioritise:
 
-- clean API integration
-- readable components
-- clear loading and error states
-- inspectable search results
-- simple professional UI
-- no fake AI features
-- no hidden retrieval behaviour
+- reliable clone-and-run reviewer experience
+- deterministic stable IDs and hashes
+- clean SQLite persistence
+- inspectable retrieval, summaries, jobs, citations, and evidence
+- clear user-facing errors and empty states
+- no source-text dumps in logs
+- no secrets in config, docs, logs, or tests
+- meaningful regression tests
+- generated artifact cleanup
 
 Avoid:
 
 - unnecessary abstractions
-- advanced styling before behaviour works
+- broad architecture rewrites
 - mocked core backend behaviour
-- committed secrets
+- committed secrets or generated artifacts
