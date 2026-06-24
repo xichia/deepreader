@@ -95,6 +95,10 @@ def get_document(session: Session, document_id: int) -> Document | None:
     )
 
 
+def get_document_record(session: Session, record_id: int) -> DocumentRecord | None:
+    return session.scalar(select(DocumentRecord).where(DocumentRecord.id == record_id))
+
+
 def list_document_records(session: Session, document_id: int) -> list[DocumentRecord]:
     return list(
         session.scalars(
@@ -174,6 +178,8 @@ def set_job_status(
     job.updated_at = utc_now()
     if status in {JOB_STATUS_COMPLETED, JOB_STATUS_FAILED}:
         job.finished_at = utc_now()
+    else:
+        job.finished_at = None
     session.add(job)
     session.flush()
     return job
@@ -195,6 +201,8 @@ def set_job_step_status(
     step.updated_at = utc_now()
     if status in {JOB_STATUS_COMPLETED, JOB_STATUS_FAILED}:
         step.finished_at = utc_now()
+    else:
+        step.finished_at = None
     session.add(step)
     session.flush()
     return step
@@ -226,6 +234,7 @@ def get_job(session: Session, job_id: int) -> Job | None:
     return session.scalar(
         select(Job)
         .options(selectinload(Job.steps))
+        .options(selectinload(Job.document).selectinload(Document.records))
         .where(Job.id == job_id)
     )
 

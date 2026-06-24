@@ -156,12 +156,32 @@ code {
 
 .muted,
 .error-message,
-.success-message {
+.success-message,
+.empty-state {
   margin: 16px;
 }
 
 .muted {
   color: #6b716c;
+}
+
+.empty-state {
+  border: 1px dashed #cfcac0;
+  border-radius: 8px;
+  background: #fafaf7;
+  color: #4b514c;
+  padding: 12px;
+}
+
+.empty-state strong {
+  display: block;
+  margin-bottom: 6px;
+  color: #252522;
+}
+
+.empty-state p {
+  margin: 0 0 8px;
+  line-height: 1.45;
 }
 
 .error-message {
@@ -358,6 +378,34 @@ code {
   text-align: right;
 }
 
+.job-actions {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.job-actions .secondary-button {
+  min-height: 30px;
+  padding: 0 10px;
+  font-size: 12px;
+}
+
+.job-steps {
+  display: grid;
+  max-height: 260px;
+  gap: 8px;
+  overflow: auto;
+  border-top: 1px solid #ece8df;
+  padding-top: 8px;
+}
+
+.job-step {
+  border: 1px solid #ece8df;
+  border-radius: 8px;
+  background: #fafaf7;
+  padding: 8px;
+}
+
 .record-list {
   padding: 12px;
 }
@@ -480,6 +528,28 @@ code {
   display: inline-flex;
   align-items: center;
   gap: 7px;
+}
+
+.suggestion-row {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+}
+
+.chip-button {
+  min-height: 30px;
+  border: 1px solid #d8d5cd;
+  border-radius: 999px;
+  background: #f3f4ef;
+  color: #31332f;
+  padding: 0 10px;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.chip-button:hover {
+  border-color: #8fb4a7;
+  background: #f4faf7;
 }
 
 .search-results {

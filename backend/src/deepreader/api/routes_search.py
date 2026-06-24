@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -19,6 +20,7 @@ from deepreader.storage.repositories import (
 )
 
 router = APIRouter(tags=["search"])
+LOGGER = logging.getLogger(__name__)
 
 
 class SearchRequest(BaseModel):
@@ -84,6 +86,16 @@ def search(request: SearchRequest, session: Session = Depends(get_session)) -> S
         use_fusion=request.use_fusion,
     )
     log_search_query(session, request.query)
+    LOGGER.info(
+        "Search completed document_id=%s query_length=%s results=%s source=%s summaries=%s vector=%s fusion=%s",
+        request.document_id,
+        len(request.query),
+        len(retrieval_results),
+        request.search_source_text,
+        request.search_summaries,
+        request.use_local_vector,
+        request.use_fusion,
+    )
 
     return SearchResponse(
         query=request.query,

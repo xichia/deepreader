@@ -153,7 +153,7 @@ function App() {
     <main className="app-shell">
       <header className="app-header">
         <div>
-          <p className="eyebrow">DeepReader v0.3</p>
+          <p className="eyebrow">DeepReader v0.4</p>
           <h1>Processing Workbench</h1>
         </div>
         <div className="api-pill">
@@ -173,7 +173,7 @@ function App() {
             onSelect={setSelectedDocumentId}
             onUploadComplete={(documentId) => void handleUploadComplete(documentId)}
           />
-          <JobPanel jobs={jobs} isLoading={jobsLoading} error={jobsError} onRefresh={() => void loadJobs()} />
+          <JobPanel jobs={jobs} isLoading={jobsLoading} error={jobsError} onRefresh={loadJobs} />
         </div>
         <DocumentRecords
           document={selectedDocument}

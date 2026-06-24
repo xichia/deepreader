@@ -3,6 +3,7 @@ import type {
   DocumentSummary,
   IngestResponse,
   Job,
+  JobStep,
   QaRequest,
   QaResponse,
   RecordSummary,
@@ -18,10 +19,19 @@ async function requestJson<T>(path: string, init?: RequestInit): Promise<T> {
     headers.set("Content-Type", "application/json");
   }
 
-  const response = await fetch(`${API_BASE_URL}${path}`, {
-    ...init,
-    headers,
-  });
+  let response: Response;
+  try {
+    response = await fetch(`${API_BASE_URL}${path}`, {
+      ...init,
+      headers,
+    });
+  } catch (error) {
+    throw new Error(
+      error instanceof TypeError
+        ? `Unable to reach DeepReader backend at ${API_BASE_URL}.`
+        : "Network request failed.",
+    );
+  }
 
   if (!response.ok) {
     const message = await readErrorMessage(response);
@@ -65,6 +75,20 @@ export function fetchJobs(): Promise<Job[]> {
   return requestJson<Job[]>("/jobs");
 }
 
+export function fetchJob(jobId: number): Promise<Job> {
+  return requestJson<Job>(`/jobs/${jobId}`);
+}
+
+export function fetchJobSteps(jobId: number): Promise<JobStep[]> {
+  return requestJson<JobStep[]>(`/jobs/${jobId}/steps`);
+}
+
+export function retryFailedJobSteps(jobId: number): Promise<Job> {
+  return requestJson<Job>(`/jobs/${jobId}/retry-failed`, {
+    method: "POST",
+  });
+}
+
 export function runSearch(request: SearchRequest): Promise<SearchResponse> {
   return requestJson<SearchResponse>("/search", {
     method: "POST",
@@ -84,10 +108,19 @@ export async function uploadDocument(file: File): Promise<IngestResponse> {
   const body = new FormData();
   body.append("file", file);
 
-  const response = await fetch(`${API_BASE_URL}${endpoint}`, {
-    method: "POST",
-    body,
-  });
+  let response: Response;
+  try {
+    response = await fetch(`${API_BASE_URL}${endpoint}`, {
+      method: "POST",
+      body,
+    });
+  } catch (error) {
+    throw new Error(
+      error instanceof TypeError
+        ? `Unable to reach DeepReader backend at ${API_BASE_URL}.`
+        : "Network request failed.",
+    );
+  }
 
   if (!response.ok) {
     const message = await readErrorMessage(response);

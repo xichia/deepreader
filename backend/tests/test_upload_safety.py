@@ -17,6 +17,24 @@ def test_text_upload_rejects_path_traversal_filename(
     assert response.status_code == 400
 
 
+def test_text_upload_rejects_suspicious_filename(client: TestClient) -> None:
+    response = client.post(
+        "/documents/ingest/text",
+        files={"file": ("manual;rm.txt", b"safe text body", "text/plain")},
+    )
+
+    assert response.status_code == 400
+
+
+def test_epub_upload_rejects_text_extension(client: TestClient) -> None:
+    response = client.post(
+        "/documents/ingest/epub",
+        files={"file": ("manual.txt", b"not an epub", "text/plain")},
+    )
+
+    assert response.status_code == 400
+
+
 def test_text_upload_rejects_wrong_extension(client: TestClient) -> None:
     response = client.post(
         "/documents/ingest/text",

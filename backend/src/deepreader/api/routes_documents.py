@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from collections.abc import Iterator
+import logging
 from typing import Any
 
 from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile, status
@@ -21,6 +22,7 @@ from deepreader.storage.repositories import (
 )
 
 router = APIRouter(prefix="/documents", tags=["documents"])
+LOGGER = logging.getLogger(__name__)
 
 
 class DocumentOut(BaseModel):
@@ -105,6 +107,7 @@ async def ingest_text_upload(
 ) -> IngestResponse:
     filename = validate_upload_filename(file.filename, {".txt"})
     data = await read_upload_bytes(file, request.app.state.upload_max_bytes)
+    LOGGER.info("Accepted text upload filename=%s bytes=%s", filename, len(data))
 
     try:
         text = data.decode("utf-8")
@@ -122,6 +125,7 @@ async def ingest_text_upload(
         source_type="txt",
         source_bytes=data,
     )
+    LOGGER.info("Stored text document document_id=%s records=%s", document.id, len(parsed_document.records))
     return IngestResponse(document=document_detail_out(document, len(parsed_document.records)))
 
 
@@ -133,6 +137,7 @@ async def ingest_epub_upload(
 ) -> IngestResponse:
     filename = validate_upload_filename(file.filename, {".epub"})
     data = await read_upload_bytes(file, request.app.state.upload_max_bytes)
+    LOGGER.info("Accepted EPUB upload filename=%s bytes=%s", filename, len(data))
 
     try:
         parsed_document = parse_epub_document(data)
@@ -149,6 +154,7 @@ async def ingest_epub_upload(
         source_type="epub",
         source_bytes=data,
     )
+    LOGGER.info("Stored EPUB document document_id=%s records=%s", document.id, len(parsed_document.records))
     return IngestResponse(document=document_detail_out(document, len(parsed_document.records)))
 
 

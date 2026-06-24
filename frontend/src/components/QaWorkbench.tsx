@@ -11,6 +11,7 @@ type QaWorkbenchProps = {
 };
 
 type QaScope = "all" | number;
+const EXAMPLE_QUESTIONS = ["What causes low flow?", "What indicates bearing wear?", "How often should the filter be replaced?"];
 
 function QaWorkbench({ documents, selectedDocumentId }: QaWorkbenchProps) {
   const [question, setQuestion] = useState("");
@@ -81,6 +82,13 @@ function QaWorkbench({ documents, selectedDocumentId }: QaWorkbenchProps) {
             placeholder="What causes low flow?"
           />
         </label>
+        <div className="suggestion-row" aria-label="Example QA questions">
+          {EXAMPLE_QUESTIONS.map((example) => (
+            <button className="chip-button" key={example} type="button" onClick={() => setQuestion(example)}>
+              {example}
+            </button>
+          ))}
+        </div>
 
         <div className="form-row qa-controls">
           <label>
@@ -141,7 +149,8 @@ function QaWorkbench({ documents, selectedDocumentId }: QaWorkbenchProps) {
       </form>
 
       {error ? <p className="error-message">{error}</p> : null}
-      {!response && !isLoading ? <p className="muted">No question asked yet.</p> : null}
+      {documents.length === 0 ? <p className="muted">Upload a document before asking a QA question.</p> : null}
+      {!response && !isLoading ? <p className="muted">No QA request has been run in this session.</p> : null}
 
       {response ? (
         <div className="qa-output">
@@ -150,6 +159,9 @@ function QaWorkbench({ documents, selectedDocumentId }: QaWorkbenchProps) {
               <strong>confidence: {response.confidence}</strong>
               <span>{response.answer_id ? `answer ${response.answer_id}` : "not persisted"}</span>
             </div>
+            <p className="inline-note">
+              {response.citations.length} citations / {response.evidence.length} evidence packets
+            </p>
             <p>{response.answer}</p>
           </article>
 

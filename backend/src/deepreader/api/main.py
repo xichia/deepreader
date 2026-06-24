@@ -29,7 +29,7 @@ def get_cors_origins() -> list[str]:
 
 
 def create_app(database_url: str | None = None, upload_max_bytes: int | None = None) -> FastAPI:
-    app = FastAPI(title="DeepReader Backend", version="0.3.0")
+    app = FastAPI(title="DeepReader Backend", version="0.4.0")
 
     cors_origins = get_cors_origins()
     if cors_origins:

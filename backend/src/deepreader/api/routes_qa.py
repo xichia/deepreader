@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from typing import Any
 
 from fastapi import APIRouter, Depends, HTTPException, status
@@ -23,6 +24,7 @@ from deepreader.storage.repositories import (
 )
 
 router = APIRouter(tags=["qa"])
+LOGGER = logging.getLogger(__name__)
 
 
 class QaRequest(BaseModel):
@@ -122,6 +124,14 @@ def ask_question(request: QaRequest, session: Session = Depends(get_session)) ->
         retrieval_settings=retrieval_settings,
         evidence=[packet.to_dict() for packet in evidence],
         citations=[citation.to_dict() for citation in answer.citations],
+    )
+    LOGGER.info(
+        "QA completed answer_id=%s document_id=%s question_length=%s evidence=%s citations=%s",
+        stored.id,
+        request.document_id,
+        len(request.question),
+        len(evidence),
+        len(answer.citations),
     )
 
     return QaResponse(

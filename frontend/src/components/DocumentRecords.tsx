@@ -49,7 +49,7 @@ function DocumentRecords({
 
       {error ? <p className="error-message">{error}</p> : null}
       {isLoading ? <p className="muted">Loading records...</p> : null}
-      {!document ? <p className="muted">No document selected.</p> : null}
+      {!document ? <p className="muted">Select or upload a document to inspect deterministic records.</p> : null}
       {document && !isLoading && records.length === 0 ? <p className="muted">No records found.</p> : null}
 
       <div className="record-list">
@@ -69,7 +69,7 @@ function DocumentRecords({
                   <code>{summary.summariser_name}</code>
                 </div>
               ) : (
-                <p className="inline-note">No current summary</p>
+                <p className="inline-note">No current summary. Generate summaries for this document to fill this field.</p>
               )}
               <div className="source-box">
                 <div className="text-label">source text</div>

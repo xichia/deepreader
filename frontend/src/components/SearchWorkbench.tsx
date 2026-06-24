@@ -10,6 +10,7 @@ type SearchWorkbenchProps = {
 };
 
 type SearchScope = "all" | number;
+const EXAMPLE_QUERIES = ["what causes low flow?", "bearing wear", "filter replacement"];
 
 function SearchWorkbench({ documents, selectedDocumentId }: SearchWorkbenchProps) {
   const [query, setQuery] = useState("");
@@ -79,6 +80,13 @@ function SearchWorkbench({ documents, selectedDocumentId }: SearchWorkbenchProps
             placeholder="low flow"
           />
         </label>
+        <div className="suggestion-row" aria-label="Example search queries">
+          {EXAMPLE_QUERIES.map((example) => (
+            <button className="chip-button" key={example} type="button" onClick={() => setQuery(example)}>
+              {example}
+            </button>
+          ))}
+        </div>
 
         <div className="form-row">
           <label>
@@ -147,6 +155,9 @@ function SearchWorkbench({ documents, selectedDocumentId }: SearchWorkbenchProps
         </button>
       </form>
 
+      {documents.length === 0 ? (
+        <p className="muted">Upload a document before searching. Example documents live in the repository `examples` folder.</p>
+      ) : null}
       {error ? <p className="error-message">{error}</p> : null}
       <SearchResults response={response} isLoading={isLoading} />
     </section>

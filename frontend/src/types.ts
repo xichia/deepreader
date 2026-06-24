@@ -46,6 +46,7 @@ export type JobStep = {
   step_type: string;
   target_type: string;
   target_id: number;
+  target_stable_id: string | null;
   status: "pending" | "running" | "completed" | "failed";
   attempt_count: number;
   error_message: string | null;

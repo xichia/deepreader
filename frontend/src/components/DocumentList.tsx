@@ -36,7 +36,13 @@ function DocumentList({
 
       {error ? <p className="error-message">{error}</p> : null}
       {isLoading ? <p className="muted">Loading documents...</p> : null}
-      {!isLoading && documents.length === 0 ? <p className="muted">No documents found.</p> : null}
+      {!isLoading && documents.length === 0 ? (
+        <div className="empty-state">
+          <strong>No documents yet</strong>
+          <p>Upload a `.txt` or `.epub` file to inspect records, stable IDs, summaries, retrieval, and QA evidence.</p>
+          <p className="inline-note">For the reviewer demo, start with `examples/simple_manual.txt`.</p>
+        </div>
+      ) : null}
 
       <div className="document-list">
         {documents.map((document) => (
