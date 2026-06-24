@@ -1,23 +1,45 @@
 # DeepReader
 
-DeepReader is a local document intelligence and RAG workbench for inspecting how technical documents become retrievable evidence. It is built as a portfolio-grade engineering system rather than a chatbot wrapper: every record, score, summary, job, citation, and evidence packet is visible.
+DeepReader is a local-first AI document intelligence and RAG workbench for turning technical documents into inspectable retrieval evidence. It demonstrates the pieces a reviewer expects in a serious RAG system: document ingestion, deterministic record IDs, source-preserving retrieval, summaries, processing jobs, citations, and evidence inspection.
 
-## Current Scope
+It is intentionally not a chatbot wrapper. The dashboard exposes records, scores, retrieval methods, summaries, job steps, citations, and evidence packets so the retrieval pipeline can be inspected end to end.
 
-DeepReader v0.4 includes:
+## Visual Walkthrough
 
-- FastAPI backend with SQLite persistence
-- text and EPUB upload ingestion
-- deterministic document records and stable IDs
-- BM25 source-text search
-- deterministic local record summaries with checkpointing
-- jobs and job steps for processing inspection
-- summary-aware search
-- local vector-style retrieval and simple fusion
-- evidence packets, citation mapping, and deterministic extractive QA
-- React/Vite/TypeScript inspection dashboard
-- Docker Compose local demo setup
-- backend and frontend CI workflow
+![DeepReader dashboard showing upload controls and document records](docs/screenshots/dashboard.png)
+
+*Document upload and records: ingest local `.txt` or `.epub` files, select documents, and inspect stable record IDs.*
+
+![DeepReader records panel showing generated summaries](docs/screenshots/records-summaries.png)
+
+*Generated summaries: deterministic local summaries are displayed beside preserved source text.*
+
+![DeepReader search results showing retrieval details](docs/screenshots/search-results.png)
+
+*Search/retrieval results: compare ranked records with scores, retrieval methods, metadata, summaries, and source text.*
+
+![DeepReader QA panel showing citations and evidence](docs/screenshots/qa-citations.png)
+
+*Extractive QA with citations/evidence: answers remain tied to cited records and inspectable evidence packets.*
+
+![DeepReader jobs panel showing processing steps](docs/screenshots/jobs.png)
+
+*Job tracking and steps: summary processing jobs expose status, progress, target stable IDs, attempts, and errors.*
+
+## Core Features
+
+- Text and EPUB ingestion through a FastAPI backend.
+- SQLite persistence for local, reproducible demos.
+- Deterministic document records with stable IDs and source hashes.
+- Source-preserving BM25 retrieval over original document text.
+- Local vector-style retrieval and simple fusion for comparison.
+- Deterministic local summaries with checkpointing.
+- Processing jobs and job steps for summary generation.
+- Summary-aware search with visible retrieval methods and component scores.
+- Deterministic extractive QA with citations, evidence packets, and retrieval settings.
+- React/Vite/TypeScript dashboard built for inspection rather than chat.
+- Docker Compose setup for a no-secrets local demo.
+- Backend tests and frontend build in GitHub Actions CI.
 
 No API keys are required. The local summariser and QA flow are deterministic placeholders for pipeline verification; they do not call OpenAI, Gemini, or any paid external API.
 
@@ -31,7 +53,7 @@ No API keys are required. The local summariser and QA flow are deterministic pla
 - `backend/src/deepreader/answer`: extractive QA, evidence packets, and citations.
 - `frontend/src`: dashboard panels for uploads, documents, records, jobs, search, and QA.
 
-More detail lives in [docs/ARCHITECTURE.md](/Users/ianchia/deepreader/docs/ARCHITECTURE.md).
+More detail lives in [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
 ## Local Quickstart
 
@@ -76,7 +98,7 @@ No secrets or external services are required.
 
 ## Demo Workflow
 
-Use [docs/DEMO_WORKFLOW.md](/Users/ianchia/deepreader/docs/DEMO_WORKFLOW.md) for a step-by-step reviewer script. The short version:
+Use [docs/DEMO_WORKFLOW.md](docs/DEMO_WORKFLOW.md) for a step-by-step reviewer script. The short version:
 
 1. Start backend and frontend locally, or run Docker Compose.
 2. Upload `examples/simple_manual.txt`.
@@ -92,9 +114,9 @@ Reviewer checklist:
 
 - Uploads accept `.txt` and `.epub` and reject unsafe filenames/extensions.
 - Source records remain visible and unchanged.
-- Summary generation creates inspectable jobs and steps.
-- Search results show scores, retrieval methods, metadata, and source text.
-- QA answers expose citations and evidence, not hidden generated claims.
+- Stable IDs make records traceable across retrieval, summaries, citations, and jobs.
+- Search results show scores, retrieval methods, metadata, summaries, and source text.
+- QA answers expose citations and evidence rather than hidden generated claims.
 - Tests and frontend build pass locally.
 
 ## Uploads
@@ -104,11 +126,11 @@ Dashboard uploads use the real API:
 - `POST /documents/ingest/text` for `.txt`
 - `POST /documents/ingest/epub` for `.epub`
 
-The backend enforces a local filename safety check, extension allowlist, and upload size limit. Duplicate ingest currently creates another document row, while deterministic record stable IDs are reused for identical content. That behavior is intentional for now and tested.
+The backend enforces local filename safety checks, extension allowlists, and upload size limits. Duplicate ingest currently creates another document row, while deterministic record stable IDs are reused for identical content. That behavior is intentional for now and tested.
 
 ## Jobs, Summaries, And Checkpointing
 
-Generating summaries for a document creates a `record_summary` job and one `summarise_record` step per record. The job runner is synchronous in v0.4, but it stores background-style progress:
+Generating summaries for a document creates a `record_summary` job and one `summarise_record` step per record. The job runner is synchronous today, but it stores background-style progress:
 
 - `pending`
 - `running`
@@ -201,17 +223,17 @@ The default CORS origins are local-only. Uploaded file content and secrets are n
 ## Limitations
 
 - SQLite is the only configured persistence layer.
+- Text and EPUB are supported; real OCR and PDF OCR are not implemented.
 - Summary jobs are synchronous despite job/step bookkeeping.
 - The local summariser is deterministic and extractive, not an LLM summary.
 - The local vector-style retriever is not embeddings and should not be treated as semantic search.
 - Fusion is intentionally simple.
 - QA is extractive and deterministic, not answer generation from a model.
-- No auth, multi-user permissions, cloud deployment, PostgreSQL, Celery, Redis, or production observability stack.
-- Screenshots are not committed yet. Add them later under `docs/assets/` after a stable visual QA pass.
+- No auth, multi-user permissions, hosted deployment, PostgreSQL, Celery, Redis, or production observability stack.
 
 ## Roadmap
 
-- Add screenshots and a short demo video.
+- Add a short demo video.
 - Add optional provider-backed summaries behind disabled-by-default configuration.
 - Add real embeddings and hybrid retrieval in a later milestone.
 - Add richer job retry/checkpoint inspection.
