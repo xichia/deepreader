@@ -33,3 +33,22 @@ frontend/.env
 frontend/.env.local
 frontend/.env.development.local
 frontend/.env.production.local
+# Local secrets
+.env.local
+.env.*.local
+# Local runtime artifacts
+.local/
+output/
+*.db
+*.log
+# OS/editor metadata
+.vscode/
+.idea/
+# Python
+.mypy_cache/
+venv/
+# DeepReader local data
+uploads/
+backend/uploads/
+backend/output/
+backend/.local/
