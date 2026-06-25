@@ -239,3 +239,7 @@ The default CORS origins are local-only. Uploaded file content and secrets are n
 - Add richer job retry/checkpoint inspection.
 - Add exportable evidence packets for reviewer handoff.
 - Consider production deployment concerns only after the local portfolio workflow is stable.
+
+## License
+
+This project is licensed under the MIT License. See [LICENSE](LICENSE).
