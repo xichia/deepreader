@@ -53,7 +53,7 @@ class Settings(BaseModel):
         default_factory=lambda: int(os.getenv("SUMMARY_MAX_PROVIDER_CALLS_PER_JOB", "10"))
     )
     summary_max_input_tokens_per_job: int = Field(
-        default_factory=lambda: int(os.getenv("SUMMARY_MAX_INPUT_TOKENS_PER_JOB", "50000"))
+        default_factory=lambda: int(os.getenv("SUMMARY_MAX_INPUT_TOKENS_PER_JOB") or "0")
     )
 
     def lane_credential_env_names(self) -> list[str]:

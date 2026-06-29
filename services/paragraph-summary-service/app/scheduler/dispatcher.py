@@ -102,8 +102,8 @@ def validate_provider_configuration() -> dict[str, str]:
         )
     if settings.summary_max_provider_calls_per_job < 1:
         raise ProviderConfigurationError("SUMMARY_MAX_PROVIDER_CALLS_PER_JOB must be at least 1")
-    if settings.summary_max_input_tokens_per_job < 1:
-        raise ProviderConfigurationError("SUMMARY_MAX_INPUT_TOKENS_PER_JOB must be at least 1")
+    if settings.summary_max_input_tokens_per_job < 0:
+        raise ProviderConfigurationError("SUMMARY_MAX_INPUT_TOKENS_PER_JOB cannot be negative")
 
     credentials: dict[str, str] = {}
     missing_names: list[str] = []
@@ -421,7 +421,10 @@ async def _run_job_background(job: JobState, request: SummaryRequest) -> None:
             > usable_hard_max
             for batch in batches
         )
-        if oversized_batch or estimated_input_tokens > settings.summary_max_input_tokens_per_job:
+        if oversized_batch or (
+            settings.summary_max_input_tokens_per_job > 0
+            and estimated_input_tokens > settings.summary_max_input_tokens_per_job
+        ):
             _fail_batches(
                 job,
                 batches,
