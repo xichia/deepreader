@@ -16,7 +16,7 @@ from deepreader.records.metadata import ParsedDocument, SourceRecord
 LOGGER = logging.getLogger(__name__)
 
 
-def parse_pdf_document(file_bytes: bytes, title: str | None = None) -> ParsedDocument:
+def parse_pdf_document(file_input: bytes | str, title: str | None = None) -> ParsedDocument:
     """Parse PDF content into ordered paragraph records."""
 
     if PdfReader is None:
@@ -26,7 +26,10 @@ def parse_pdf_document(file_bytes: bytes, title: str | None = None) -> ParsedDoc
     inferred_title = title
 
     try:
-        reader = PdfReader(io.BytesIO(file_bytes))
+        if isinstance(file_input, bytes):
+            reader = PdfReader(io.BytesIO(file_input))
+        else:
+            reader = PdfReader(file_input)
         
         if inferred_title is None and reader.metadata and reader.metadata.title:
             inferred_title = reader.metadata.title

@@ -67,7 +67,13 @@ def _ordered_document_items(book: epub.EpubBook) -> list[ebooklib.epub.EpubHtml]
 def _is_navigation_item(item: ebooklib.epub.EpubHtml) -> bool:
     item_id = (item.get_id() or "").lower()
     item_name = (item.get_name() or "").lower()
-    return item_id in {"nav", "ncx"} or item_name.endswith(("nav.xhtml", "toc.ncx"))
+
+    nav_keywords = {"nav", "toc", "ncx", "landmark", "cover", "titlepage", "title_page", "title-page"}
+    if any(kw in item_id for kw in nav_keywords):
+        return True
+    if any(kw in item_name for kw in nav_keywords):
+        return True
+    return False
 
 
 def _extract_records_from_html(html: str, chapter_index: int) -> list[SourceRecord]:
@@ -76,8 +82,32 @@ def _extract_records_from_html(html: str, chapter_index: int) -> list[SourceReco
     current_section: str | None = None
 
     for element in soup.find_all(_READABLE_TAGS):
+        # Prevent nested tags double extraction
+        has_readable_parent = False
+        parent = element.parent
+        while parent is not None:
+            if parent.name in _READABLE_TAGS:
+                has_readable_parent = True
+                break
+            parent = parent.parent
+        if has_readable_parent:
+            continue
+
         text = element.get_text(" ", strip=True)
         if not text:
+            continue
+
+        # Skip standard front-matter and navigation boilerplate records
+        if text.lower() in {
+            "begin reading",
+            "table of contents",
+            "about the author",
+            "copyright page",
+            "cover",
+            "title page",
+            "landmarks",
+            "navigation",
+        }:
             continue
 
         if element.name in {"h1", "h2", "h3", "h4"}:

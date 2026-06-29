@@ -44,9 +44,13 @@ def ingest_parsed_document(
     parsed_document: ParsedDocument,
     source_filename: str,
     source_type: str,
-    source_bytes: bytes,
+    source_bytes: bytes | None = None,
+    source_hash: Mapped[str] | str | None = None,
 ) -> Document:
-    source_hash = hash_bytes(source_bytes)
+    if source_hash is None:
+        if source_bytes is None:
+            raise ValueError("Either source_bytes or source_hash must be provided")
+        source_hash = hash_bytes(source_bytes)
     title = parsed_document.title or Path(source_filename).stem or "Untitled document"
 
     document = Document(

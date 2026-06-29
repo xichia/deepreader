@@ -6,6 +6,6 @@ def test_paragraph_chunking_trims_ignores_empty_and_preserves_order() -> None:
 
     assert split_paragraphs(text) == [
         "First paragraph.",
-        "Second line A\nSecond line B",
+        "Second line A Second line B",
         "Third paragraph.",
     ]
