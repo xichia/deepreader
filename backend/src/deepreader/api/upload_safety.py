@@ -2,27 +2,15 @@
 
 from __future__ import annotations
 
-import os
+import hashlib
 import re
+import tempfile
 from pathlib import Path
 
 from fastapi import HTTPException, UploadFile, status
 
-DEFAULT_MAX_UPLOAD_BYTES = 10 * 1024 * 1024
 SAFE_FILENAME_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9._ -]{0,254}$")
-
-
-def get_max_upload_bytes() -> int:
-    raw_value = os.getenv("DEEPREADER_MAX_UPLOAD_BYTES")
-    if raw_value is None:
-        return DEFAULT_MAX_UPLOAD_BYTES
-    try:
-        value = int(raw_value)
-    except ValueError as exc:
-        raise RuntimeError("DEEPREADER_MAX_UPLOAD_BYTES must be an integer") from exc
-    if value <= 0:
-        raise RuntimeError("DEEPREADER_MAX_UPLOAD_BYTES must be positive")
-    return value
+UPLOAD_CHUNK_BYTES = 1024 * 1024
 
 
 def validate_upload_filename(filename: str | None, allowed_extensions: set[str]) -> str:
@@ -52,11 +40,18 @@ def validate_upload_filename(filename: str | None, allowed_extensions: set[str])
     return filename
 
 
-async def read_upload_bytes(upload: UploadFile, max_bytes: int) -> bytes:
-    data = await upload.read(max_bytes + 1)
-    if len(data) > max_bytes:
-        raise HTTPException(
-            status_code=413,
-            detail="Upload exceeds configured size limit.",
-        )
-    return data
+async def stream_upload_to_temp_file_and_hash(upload: UploadFile) -> tuple[str, str]:
+    """Stream an upload to disk while calculating its SHA-256 digest."""
+
+    sha256 = hashlib.sha256()
+    temp_file = tempfile.NamedTemporaryFile(suffix=".pdf", delete=False)
+    temp_path = temp_file.name
+    try:
+        with temp_file:
+            while chunk := await upload.read(UPLOAD_CHUNK_BYTES):
+                temp_file.write(chunk)
+                sha256.update(chunk)
+    except Exception:
+        Path(temp_path).unlink(missing_ok=True)
+        raise
+    return temp_path, sha256.hexdigest()

@@ -4,13 +4,17 @@ from __future__ import annotations
 
 from collections.abc import Iterator
 import logging
+from pathlib import Path
 from typing import Any
 
 from fastapi import APIRouter, Depends, File, HTTPException, Request, UploadFile, status
 from pydantic import BaseModel
 from sqlalchemy.orm import Session
 
-from deepreader.api.upload_safety import read_upload_bytes, validate_upload_filename
+from deepreader.api.upload_safety import (
+    stream_upload_to_temp_file_and_hash,
+    validate_upload_filename,
+)
 from deepreader.ingest.epub_parser import parse_epub_document
 from deepreader.ingest.text_parser import parse_text_document
 from deepreader.storage.models import Document, DocumentRecord
@@ -101,12 +105,11 @@ def record_out(record: DocumentRecord) -> RecordOut:
 
 @router.post("/ingest/text", response_model=IngestResponse, status_code=status.HTTP_201_CREATED)
 async def ingest_text_upload(
-    request: Request,
     file: UploadFile = File(...),
     session: Session = Depends(get_session),
 ) -> IngestResponse:
     filename = validate_upload_filename(file.filename, {".txt"})
-    data = await read_upload_bytes(file, request.app.state.upload_max_bytes)
+    data = await file.read()
     LOGGER.info("Accepted text upload filename=%s bytes=%s", filename, len(data))
 
     try:
@@ -131,12 +134,11 @@ async def ingest_text_upload(
 
 @router.post("/ingest/epub", response_model=IngestResponse, status_code=status.HTTP_201_CREATED)
 async def ingest_epub_upload(
-    request: Request,
     file: UploadFile = File(...),
     session: Session = Depends(get_session),
 ) -> IngestResponse:
     filename = validate_upload_filename(file.filename, {".epub"})
-    data = await read_upload_bytes(file, request.app.state.upload_max_bytes)
+    data = await file.read()
     LOGGER.info("Accepted EPUB upload filename=%s bytes=%s", filename, len(data))
 
     try:
@@ -160,30 +162,31 @@ async def ingest_epub_upload(
 
 @router.post("/ingest/pdf", response_model=IngestResponse, status_code=status.HTTP_201_CREATED)
 async def ingest_pdf_upload(
-    request: Request,
     file: UploadFile = File(...),
     session: Session = Depends(get_session),
 ) -> IngestResponse:
     from deepreader.ingest.pdf_parser import parse_pdf_document
 
     filename = validate_upload_filename(file.filename, {".pdf"})
-    data = await read_upload_bytes(file, request.app.state.upload_max_bytes)
-    LOGGER.info("Accepted PDF upload filename=%s bytes=%s", filename, len(data))
+    temp_path, source_hash = await stream_upload_to_temp_file_and_hash(file)
+    LOGGER.info("Accepted PDF upload filename=%s hash=%s", filename, source_hash)
 
     try:
-        parsed_document = parse_pdf_document(data, title=filename)
+        parsed_document = parse_pdf_document(temp_path, title=filename)
     except Exception as exc:
         raise HTTPException(
             status_code=status.HTTP_400_BAD_REQUEST,
             detail="PDF upload could not be parsed.",
         ) from exc
+    finally:
+        Path(temp_path).unlink(missing_ok=True)
 
     document = ingest_parsed_document(
         session,
         parsed_document=parsed_document,
         source_filename=filename,
         source_type="pdf",
-        source_bytes=data,
+        source_hash=source_hash,
     )
     LOGGER.info("Stored PDF document document_id=%s records=%s", document.id, len(parsed_document.records))
     return IngestResponse(document=document_detail_out(document, len(parsed_document.records)))

@@ -35,11 +35,3 @@ def client(tmp_path: Path) -> Iterator[TestClient]:
     with TestClient(app) as test_client:
         yield test_client
     app.state.engine.dispose()
-
-
-@pytest.fixture
-def small_upload_client(tmp_path: Path) -> Iterator[TestClient]:
-    app = create_app(database_url=f"sqlite:///{tmp_path / 'small.sqlite3'}", upload_max_bytes=20)
-    with TestClient(app) as test_client:
-        yield test_client
-    app.state.engine.dispose()

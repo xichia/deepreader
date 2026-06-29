@@ -12,7 +12,6 @@ from deepreader.api.routes_documents import router as documents_router
 from deepreader.api.routes_qa import router as qa_router
 from deepreader.api.routes_search import router as search_router
 from deepreader.api.routes_summaries import router as summaries_router
-from deepreader.api.upload_safety import get_max_upload_bytes
 from deepreader.storage.db import build_engine, build_session_factory, init_db
 
 DEFAULT_CORS_ORIGINS = (
@@ -28,7 +27,7 @@ def get_cors_origins() -> list[str]:
     return [origin.strip() for origin in raw_origins.split(",") if origin.strip()]
 
 
-def create_app(database_url: str | None = None, upload_max_bytes: int | None = None) -> FastAPI:
+def create_app(database_url: str | None = None) -> FastAPI:
     app = FastAPI(title="DeepReader Backend", version="0.4.0")
 
     cors_origins = get_cors_origins()
@@ -45,7 +44,6 @@ def create_app(database_url: str | None = None, upload_max_bytes: int | None = N
     init_db(engine)
     app.state.engine = engine
     app.state.SessionLocal = build_session_factory(engine)
-    app.state.upload_max_bytes = upload_max_bytes or get_max_upload_bytes()
 
     app.include_router(documents_router)
     app.include_router(summaries_router)

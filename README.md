@@ -216,7 +216,6 @@ GitHub Actions runs backend and paragraph-service tests plus the frontend build 
 Backend defaults live in `.env.example`:
 
 - `DEEPREADER_DATABASE_URL=sqlite:///./data/deepreader.sqlite3`
-- `DEEPREADER_MAX_UPLOAD_BYTES=10485760`
 - `DEEPREADER_CORS_ORIGINS=http://127.0.0.1:5173,http://localhost:5173`
 
 The default CORS origins are local-only. Uploaded file content and secrets are not logged by design. A small redaction utility exists for future provider-backed configuration, but no provider keys are needed today.
