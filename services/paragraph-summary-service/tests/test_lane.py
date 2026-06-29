@@ -53,3 +53,121 @@ async def test_rate_limit_cooldown_is_scoped_to_one_provider_identity():
     assert not lane_two.is_rate_limit_cooling_down(get_time=mock_time)
     assert lane_one.cooldown_until == 15.0
     assert lane_two.cooldown_until is None
+
+
+def test_quota_lane_adaptive_rpm_disabled_without_flag():
+    lane = QuotaLane("test", rpm=10)
+    assert not lane.adaptive_rpm_enabled
+    # record multiple successes
+    for _ in range(10):
+        lane.record_success()
+    assert lane.current_rpm == 10
+    assert lane.success_streak == 0
+    assert lane.adaptive_adjustment_count == 0
+
+
+def test_adaptive_rpm_increases_after_threshold():
+    lane = QuotaLane(
+        "test",
+        rpm=10,
+        adaptive_rpm_enabled=True,
+        adaptive_rpm_success_threshold=3,
+        adaptive_rpm_max=12,
+    )
+    assert lane.adaptive_rpm_enabled
+    assert lane.current_rpm == 10
+
+    # 1st success
+    changed = lane.record_success()
+    assert not changed
+    assert lane.success_streak == 1
+    assert lane.current_rpm == 10
+
+    # 2nd success
+    changed = lane.record_success()
+    assert not changed
+    assert lane.success_streak == 2
+
+    # 3rd success -> threshold met, should increment RPM
+    changed = lane.record_success()
+    assert changed
+    assert lane.success_streak == 0
+    assert lane.current_rpm == 11
+    assert lane.adaptive_adjustment_count == 1
+
+    # 4th success
+    lane.record_success()
+    # 5th success
+    lane.record_success()
+    # 6th success -> threshold met again, should increment RPM to max (12)
+    changed = lane.record_success()
+    assert changed
+    assert lane.current_rpm == 12
+
+    # 7th-9th successes -> max RPM reached, should not increase further
+    lane.record_success()
+    lane.record_success()
+    changed = lane.record_success()
+    assert not changed
+    assert lane.current_rpm == 12
+
+
+def test_adaptive_rpm_rate_limit_backoff():
+    lane = QuotaLane(
+        "test",
+        rpm=5,
+        adaptive_rpm_enabled=True,
+        adaptive_rpm_max=15,
+        adaptive_rpm_backoff_factor=0.5,
+    )
+    # Scale up to 14
+    lane.current_rpm = 14
+    lane.rpm = 14
+    lane.success_streak = 2
+
+    # Rate limit hit -> streak resets, RPM backs off
+    changed = lane.record_rate_limit_response()
+    assert changed
+    assert lane.success_streak == 0
+    assert lane.current_rpm == 7  # 14 * 0.5
+    assert lane.adaptive_adjustment_count == 1
+
+    # Rate limit hit again -> backs off to base RPM (5) since 7 * 0.5 = 3 which is below base 5
+    changed = lane.record_rate_limit_response()
+    assert changed
+    assert lane.current_rpm == 5
+
+
+@pytest.mark.asyncio
+async def test_adaptive_cooldown_respects_adapted_rpm():
+    lane = QuotaLane(
+        "test",
+        rpm=10,
+        time_scale=1.0,
+        adaptive_rpm_enabled=True,
+        adaptive_rpm_success_threshold=1,
+        adaptive_rpm_max=20,
+    )
+    current_time = 0.0
+
+    def mock_time():
+        return current_time
+
+    sleep_calls = []
+
+    async def mock_sleep(delay):
+        nonlocal current_time
+        sleep_calls.append(delay)
+        current_time += delay
+
+    # Base RPM is 10 -> interval is 6.0s
+    await lane.wait_for_cooldown(get_time=mock_time, sleep=mock_sleep)
+    assert lane.last_dispatch_time == 0.0
+
+    # Adapts to RPM 11 -> interval is 60/11 = 5.4545...s
+    lane.record_success()
+    assert lane.current_rpm == 11
+
+    await lane.wait_for_cooldown(get_time=mock_time, sleep=mock_sleep)
+    assert len(sleep_calls) == 1
+    assert abs(sleep_calls[0] - (60.0 / 11.0)) < 1e-4

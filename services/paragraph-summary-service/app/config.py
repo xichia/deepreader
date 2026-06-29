@@ -66,6 +66,18 @@ class Settings(BaseModel):
     summary_retry_backoff_base_seconds: float = Field(
         default_factory=lambda: float(os.getenv("SUMMARY_RETRY_BACKOFF_BASE_SECONDS", "1"))
     )
+    summary_adaptive_rpm_enabled: bool = Field(
+        default_factory=lambda: _env_bool("SUMMARY_ADAPTIVE_RPM_ENABLED", True)
+    )
+    summary_adaptive_rpm_success_threshold: int = Field(
+        default_factory=lambda: int(os.getenv("SUMMARY_ADAPTIVE_RPM_SUCCESS_THRESHOLD", "5"))
+    )
+    summary_adaptive_rpm_max: int = Field(
+        default_factory=lambda: int(os.getenv("SUMMARY_ADAPTIVE_RPM_MAX", "3"))
+    )
+    summary_adaptive_rpm_backoff_factor: float = Field(
+        default_factory=lambda: float(os.getenv("SUMMARY_ADAPTIVE_RPM_BACKOFF_FACTOR", "0.5"))
+    )
 
     def lane_credential_env_names(self) -> list[str]:
         """Return the configured lane variable names without reading key values."""
@@ -92,6 +104,10 @@ class Settings(BaseModel):
                 self.summary_provider_rate_limit_cooldown_seconds
             ),
             "retry_backoff_base_seconds": self.summary_retry_backoff_base_seconds,
+            "adaptive_rpm_enabled": self.summary_adaptive_rpm_enabled,
+            "adaptive_rpm_success_threshold": self.summary_adaptive_rpm_success_threshold,
+            "adaptive_rpm_max": self.summary_adaptive_rpm_max,
+            "adaptive_rpm_backoff_factor": self.summary_adaptive_rpm_backoff_factor,
         }
 
 

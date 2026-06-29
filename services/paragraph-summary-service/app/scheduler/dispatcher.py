@@ -191,6 +191,9 @@ class JobState:
             "batch_max_records": settings.summary_batch_max_records,
             "provider": settings.summary_service_provider,
             "model": settings.summary_service_model,
+            "provider_current_rpm_by_alias": {},
+            "provider_success_streak_by_alias": {},
+            "provider_adaptive_adjustments_by_alias": {},
             "effective_config": settings.safe_summary(),
         }
         self._provider_call_lock = asyncio.Lock()
@@ -246,6 +249,14 @@ class JobState:
             aliases.discard(provider_alias)
         self.stats["cooldown_aliases"] = sorted(aliases)
         self.stats["cooldown_count"] = len(aliases)
+        self.touch()
+
+    def record_lane_tuning(self, lane: QuotaLane) -> None:
+        self.stats["provider_current_rpm_by_alias"][lane.provider_alias] = lane.current_rpm
+        self.stats["provider_success_streak_by_alias"][lane.provider_alias] = lane.success_streak
+        self.stats["provider_adaptive_adjustments_by_alias"][
+            lane.provider_alias
+        ] = lane.adaptive_adjustment_count
         self.touch()
 
 
@@ -314,6 +325,14 @@ def validate_provider_configuration() -> dict[str, str]:
         )
     if settings.summary_retry_backoff_base_seconds < 0:
         raise ProviderConfigurationError("SUMMARY_RETRY_BACKOFF_BASE_SECONDS cannot be negative")
+    if settings.summary_adaptive_rpm_success_threshold < 1:
+        raise ProviderConfigurationError("SUMMARY_ADAPTIVE_RPM_SUCCESS_THRESHOLD must be at least 1")
+    if settings.summary_adaptive_rpm_max < 1:
+        raise ProviderConfigurationError("SUMMARY_ADAPTIVE_RPM_MAX must be at least 1")
+    if settings.summary_adaptive_rpm_backoff_factor <= 0 or settings.summary_adaptive_rpm_backoff_factor > 1:
+        raise ProviderConfigurationError(
+            "SUMMARY_ADAPTIVE_RPM_BACKOFF_FACTOR must be greater than 0 and less than or equal to 1"
+        )
 
     if provider == "mock":
         return {}
@@ -376,6 +395,10 @@ def _build_lanes_and_providers(
                 settings.summary_provider_rate_limit_cooldown_seconds
             ),
             retry_backoff_base_seconds=settings.summary_retry_backoff_base_seconds,
+            adaptive_rpm_enabled=settings.summary_adaptive_rpm_enabled,
+            adaptive_rpm_success_threshold=settings.summary_adaptive_rpm_success_threshold,
+            adaptive_rpm_max=settings.summary_adaptive_rpm_max,
+            adaptive_rpm_backoff_factor=settings.summary_adaptive_rpm_backoff_factor,
         )
         lanes.append(lane)
         if provider_name == "gemini":
@@ -583,8 +606,10 @@ async def _process_batch(
         except Exception as exc:
             detail = _exception_failure(exc, lane=lane, attempt_count=attempt + 1)
             if lane is not None and detail.error_code == "provider_rate_limited":
+                lane.record_rate_limit_response()
                 delay = lane.defer_after_rate_limit(attempt + 1)
                 job.record_rate_limit(lane.provider_alias, cooling_down=True)
+                job.record_lane_tuning(lane)
                 LOGGER.warning(
                     "Provider rate limited lane_id=%s provider_alias=%s model=%s "
                     "attempt=%s cooldown_seconds=%.2f",
@@ -619,25 +644,31 @@ async def _process_batch(
                 lane=lane,
                 attempt_count=attempt + 1,
             )
-            if lane is not None and retry_records:
-                rate_limited = any(
-                    failure.error_code == "provider_rate_limited"
-                    for failure in validation_errors.values()
-                )
-                if rate_limited:
-                    delay = lane.defer_after_rate_limit(attempt + 1)
-                    job.record_rate_limit(lane.provider_alias, cooling_down=True)
-                    LOGGER.warning(
-                        "Provider result rate limited lane_id=%s provider_alias=%s "
-                        "model=%s attempt=%s cooldown_seconds=%.2f",
-                        lane.lane_id,
-                        lane.provider_alias,
-                        lane.model,
-                        attempt + 1,
-                        delay,
+            if lane is not None:
+                if not retry_records:
+                    lane.record_success()
+                    job.record_lane_tuning(lane)
+                else:
+                    rate_limited = any(
+                        failure.error_code == "provider_rate_limited"
+                        for failure in validation_errors.values()
                     )
-                elif attempt < MAX_RETRIES:
-                    lane.defer_before_retry(attempt + 1)
+                    if rate_limited:
+                        lane.record_rate_limit_response()
+                        delay = lane.defer_after_rate_limit(attempt + 1)
+                        job.record_rate_limit(lane.provider_alias, cooling_down=True)
+                        job.record_lane_tuning(lane)
+                        LOGGER.warning(
+                            "Provider result rate limited lane_id=%s provider_alias=%s "
+                            "model=%s attempt=%s cooldown_seconds=%.2f",
+                            lane.lane_id,
+                            lane.provider_alias,
+                            lane.model,
+                            attempt + 1,
+                            delay,
+                        )
+                    elif attempt < MAX_RETRIES:
+                        lane.defer_before_retry(attempt + 1)
         job.artifact_lines.extend(valid_results)
         job.completed_records += len(valid_results)
         last_failures.update(validation_errors)
@@ -836,6 +867,15 @@ async def _run_job_background(job: JobState, request: SummaryRequest) -> None:
     job.stats["active_batches_by_alias"] = {alias: 0 for alias in provider_aliases}
     job.stats["provider_calls_by_alias"] = {alias: 0 for alias in provider_aliases}
     job.stats["rate_limit_count_by_alias"] = {alias: 0 for alias in provider_aliases}
+    job.stats["provider_current_rpm_by_alias"] = {
+        lane.provider_alias: lane.current_rpm for lane in lanes
+    }
+    job.stats["provider_success_streak_by_alias"] = {
+        lane.provider_alias: lane.success_streak for lane in lanes
+    }
+    job.stats["provider_adaptive_adjustments_by_alias"] = {
+        lane.provider_alias: lane.adaptive_adjustment_count for lane in lanes
+    }
     lane_queue: asyncio.Queue[QuotaLane] = asyncio.Queue()
     for lane in lanes:
         lane_queue.put_nowait(lane)

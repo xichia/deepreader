@@ -216,6 +216,30 @@ Follow this workflow to validate PDF extraction and remote summary generation en
 
 On a 429, only the affected alias enters a jittered exponential cooldown; other aliases continue. If every identity is cooling down, their workers wait rather than issuing immediate retries. Other provider failures use a shorter jittered retry backoff. The dispatcher still respects the job-wide call cap and writes sanitized failed artifact lines after exhaustion. Each line includes a stable error code plus provider/model, lane, safe provider alias, attempt/retry, and available usage details without credentials or source text. Do not rapidly resubmit. Wait for the project quota window/cooldown, then run Generate summaries again. The backend job checkpoints already imported Gemini summaries with matching source hashes and resubmits only records that still need work.
 
+## Adaptive RPM and Canary Record Limits
+
+Adaptive RPM is enabled by default.
+Each provider alias starts at SUMMARY_LANE_RPM.
+After repeated successful calls, the alias may increase up to SUMMARY_ADAPTIVE_RPM_MAX.
+On provider rate limits, only that alias backs down toward SUMMARY_LANE_RPM and enters cooldown.
+Set SUMMARY_ADAPTIVE_RPM_ENABLED=false to force fixed RPM behaviour.
+
+* `SUMMARY_ADAPTIVE_RPM_ENABLED` (default `true`): Enables adaptive RPM control per alias.
+* `SUMMARY_ADAPTIVE_RPM_SUCCESS_THRESHOLD` (default `5`): Number of consecutive successful calls on an alias before increasing its RPM by 1.
+* `SUMMARY_ADAPTIVE_RPM_MAX` (default `3`): The maximum RPM ceiling the adaptive tuner can scale up to.
+* `SUMMARY_ADAPTIVE_RPM_BACKOFF_FACTOR` (default `0.5`): Multiplier applied to reduce RPM on a 429 rate limit (never drops below the configured base RPM or 1).
+* `CANARY_MAX_RECORDS` (default `0`): Truncates the fetched document to a max record count for real-document canary verification.
+
+### Running a small real-document canary:
+
+```bash
+# Validate against the first 100 records of a real document
+CANARY_MAX_RECORDS=100 bash scripts/gemini_scheduler_canary.sh
+```
+
+> [!NOTE]
+> Synthetic canary mode (`CANARY_SYNTHETIC=1`) remains preferred for scheduler and scale validation to avoid sending real workspace document contents to external providers.
+
 ## Offline verification
 
 No test calls Gemini. Provider tests inject fake response/client objects.

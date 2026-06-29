@@ -370,6 +370,7 @@ def test_provider_safe_local_defaults(monkeypatch):
         "SUMMARY_MAX_INPUT_TOKENS_PER_JOB",
         "SUMMARY_PROVIDER_RATE_LIMIT_COOLDOWN_SECONDS",
         "SUMMARY_RETRY_BACKOFF_BASE_SECONDS",
+        "SUMMARY_ADAPTIVE_RPM_ENABLED",
     ):
         monkeypatch.delenv(name, raising=False)
 
@@ -386,6 +387,7 @@ def test_provider_safe_local_defaults(monkeypatch):
     assert fresh_settings.summary_max_input_tokens_per_job == 0
     assert fresh_settings.summary_provider_rate_limit_cooldown_seconds == 60
     assert fresh_settings.summary_retry_backoff_base_seconds == 1
+    assert fresh_settings.summary_adaptive_rpm_enabled is True
 
 
 @pytest.mark.asyncio
@@ -542,3 +544,102 @@ async def test_large_input_blocked_when_cap_enabled(monkeypatch):
     assert job.status == "failed"
     assert len(dispatch_calls) == 0
     assert job.artifact_lines[0].error_code == "max_input_tokens_exceeded"
+
+
+@pytest.mark.asyncio
+async def test_adaptive_rpm_settings_in_effective_config(monkeypatch):
+    monkeypatch.setenv("SUMMARY_ADAPTIVE_RPM_ENABLED", "true")
+    monkeypatch.setenv("SUMMARY_ADAPTIVE_RPM_SUCCESS_THRESHOLD", "4")
+    monkeypatch.setenv("SUMMARY_ADAPTIVE_RPM_MAX", "8")
+    monkeypatch.setenv("SUMMARY_ADAPTIVE_RPM_BACKOFF_FACTOR", "0.7")
+
+    fresh_settings = Settings()
+    monkeypatch.setattr(settings, "summary_service_provider", "mock")
+    monkeypatch.setattr(settings, "summary_adaptive_rpm_enabled", fresh_settings.summary_adaptive_rpm_enabled)
+    monkeypatch.setattr(settings, "summary_adaptive_rpm_success_threshold", fresh_settings.summary_adaptive_rpm_success_threshold)
+    monkeypatch.setattr(settings, "summary_adaptive_rpm_max", fresh_settings.summary_adaptive_rpm_max)
+    monkeypatch.setattr(settings, "summary_adaptive_rpm_backoff_factor", fresh_settings.summary_adaptive_rpm_backoff_factor)
+
+    request = SummaryRequest(
+        document_id="doc-adaptive-config",
+        records=[InputRecord(record_id="r1", text="local", source_hash="h1")],
+    )
+    job = JobState("job-adaptive-config", request.document_id, 1)
+
+    await _run_job_background(job, request)
+
+    eff = job.stats["effective_config"]
+    assert eff["adaptive_rpm_enabled"] is True
+    assert eff["adaptive_rpm_success_threshold"] == 4
+    assert eff["adaptive_rpm_max"] == 8
+    assert eff["adaptive_rpm_backoff_factor"] == 0.7
+
+
+@pytest.mark.asyncio
+async def test_adaptive_rpm_default_settings_in_effective_config(monkeypatch):
+    monkeypatch.delenv("SUMMARY_ADAPTIVE_RPM_ENABLED", raising=False)
+    fresh_settings = Settings()
+    monkeypatch.setattr(settings, "summary_service_provider", "mock")
+    monkeypatch.setattr(settings, "summary_adaptive_rpm_enabled", fresh_settings.summary_adaptive_rpm_enabled)
+
+    request = SummaryRequest(
+        document_id="doc-adaptive-config-default",
+        records=[InputRecord(record_id="r1", text="local", source_hash="h1")],
+    )
+    job = JobState("job-adaptive-config-default", request.document_id, 1)
+
+    await _run_job_background(job, request)
+
+    eff = job.stats["effective_config"]
+    assert eff["adaptive_rpm_enabled"] is True
+
+
+@pytest.mark.asyncio
+async def test_adaptive_rpm_streak_updates_diagnostics(monkeypatch):
+    _configure_one_gemini_lane(monkeypatch)
+    monkeypatch.setattr(settings, "summary_adaptive_rpm_enabled", True)
+    monkeypatch.setattr(settings, "summary_adaptive_rpm_success_threshold", 2)
+    monkeypatch.setattr(settings, "summary_adaptive_rpm_max", 15)
+    monkeypatch.setattr(settings, "summary_lane_rpm", 10)
+    monkeypatch.setattr(settings, "summary_max_parallel_lanes", 1)
+
+    class FakeSuccessProvider:
+        def __init__(self, model_name, template_version, api_key, lane_id):
+            pass
+
+        async def summarize_batch(self, document_id, batch, summary_style):
+            return [
+                dispatcher_module.SummaryArtifactLine(
+                    document_id=document_id,
+                    record_id=record.record_id,
+                    stable_id=record.stable_id,
+                    source_hash=record.source_hash,
+                    summary_text="Streak summary.",
+                    summary_style=summary_style,
+                    provider="gemini",
+                    model="gemini",
+                    template_version="v1",
+                    status="completed",
+                    created_at="2026-06-29T12:00:00Z",
+                )
+                for record in batch
+            ]
+
+    monkeypatch.setattr(dispatcher_module, "GeminiProvider", FakeSuccessProvider)
+
+    request = SummaryRequest(
+        document_id="doc-streak",
+        records=[
+            InputRecord(record_id="r1", text="One", source_hash="h1"),
+            InputRecord(record_id="r2", text="Two", source_hash="h2"),
+        ],
+    )
+    monkeypatch.setattr(settings, "summary_batch_max_records", 1)
+    job = JobState("job-streak", request.document_id, 2)
+
+    await _run_job_background(job, request)
+
+    assert job.status == "completed"
+    assert job.stats["provider_current_rpm_by_alias"]["gemini_01"] == 11
+    assert job.stats["provider_success_streak_by_alias"]["gemini_01"] == 0
+    assert job.stats["provider_adaptive_adjustments_by_alias"]["gemini_01"] == 1

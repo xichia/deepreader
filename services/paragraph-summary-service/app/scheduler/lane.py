@@ -22,6 +22,10 @@ class QuotaLane:
         retry_backoff_base_seconds: float = 0.0,
         jitter_ratio: float = 0.2,
         enabled: bool = True,
+        adaptive_rpm_enabled: bool = False,
+        adaptive_rpm_success_threshold: int = 5,
+        adaptive_rpm_max: int | None = None,
+        adaptive_rpm_backoff_factor: float = 0.5,
     ):
         self.lane_id = lane_id
         self.provider = provider
@@ -29,9 +33,17 @@ class QuotaLane:
         self.model = model
         self.credential_env_name = credential_env_name
         self.api_key = api_key
-        self.rpm = rpm
+        self.time_scale = time_scale
+        self.base_rpm = rpm
+        self.current_rpm = rpm
+        self.adaptive_rpm_enabled = adaptive_rpm_enabled
+        self.adaptive_rpm_success_threshold = max(1, adaptive_rpm_success_threshold)
+        self.adaptive_rpm_max = max(1, adaptive_rpm_max or rpm)
+        self.adaptive_rpm_backoff_factor = min(1.0, max(0.01, adaptive_rpm_backoff_factor))
+        self.success_streak = 0
+        self.adaptive_adjustment_count = 0
         self.enabled = enabled
-        self.interval = (60.0 / rpm) * time_scale if rpm > 0 else 0
+        self._set_current_rpm(rpm)
         self.rate_limit_cooldown_seconds = max(0.0, rate_limit_cooldown_seconds) * time_scale
         self.retry_backoff_base_seconds = max(0.0, retry_backoff_base_seconds) * time_scale
         self.jitter_ratio = max(0.0, jitter_ratio)
@@ -40,6 +52,41 @@ class QuotaLane:
         self.cooldown_reason: str | None = None
         self.max_in_flight = 1
         self._in_flight = asyncio.Semaphore(self.max_in_flight)
+
+    def _set_current_rpm(self, rpm: int) -> None:
+        self.current_rpm = max(1, rpm)
+        self.rpm = self.current_rpm
+        self.interval = (60.0 / self.current_rpm) * self.time_scale if self.current_rpm > 0 else 0
+
+    def record_success(self) -> bool:
+        """Record a successful provider call and maybe increase this alias RPM.
+
+        Returns True if RPM changed.
+        """
+        if not self.adaptive_rpm_enabled:
+            return False
+        self.success_streak += 1
+        if self.success_streak >= self.adaptive_rpm_success_threshold and self.current_rpm < self.adaptive_rpm_max:
+            self._set_current_rpm(self.current_rpm + 1)
+            self.success_streak = 0
+            self.adaptive_adjustment_count += 1
+            return True
+        return False
+
+    def record_rate_limit_response(self) -> bool:
+        """Record a provider 429 and maybe reduce this alias RPM.
+
+        Returns True if RPM changed.
+        """
+        self.success_streak = 0
+        if not self.adaptive_rpm_enabled:
+            return False
+        new_rpm = max(self.base_rpm, int(self.current_rpm * self.adaptive_rpm_backoff_factor))
+        if new_rpm != self.current_rpm:
+            self._set_current_rpm(new_rpm)
+            self.adaptive_adjustment_count += 1
+            return True
+        return False
 
     def __repr__(self) -> str:
         credential_state = "configured" if self.api_key else "not-configured"

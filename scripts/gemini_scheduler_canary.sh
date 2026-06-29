@@ -20,6 +20,7 @@ SUMMARY_BATCH_RESERVED_OUTPUT_TOKENS="${SUMMARY_BATCH_RESERVED_OUTPUT_TOKENS:-40
 CANARY_MAX_CALLS="${CANARY_MAX_CALLS:-80}"
 POLL_SECONDS="${POLL_SECONDS:-30}"
 MAX_POLL_MINUTES="${MAX_POLL_MINUTES:-20}"
+CANARY_MAX_RECORDS="${CANARY_MAX_RECORDS:-0}"
 
 RUN_DIR="${RUN_DIR:-$ROOT/.tmp/gemini-scheduler-canary-$(date +%Y%m%d-%H%M%S)}"
 mkdir -p "$RUN_DIR"
@@ -106,7 +107,7 @@ echo "Summary service is responding."
 
 export ROOT BACKEND_URL SUMMARY_URL DOCUMENT_ID CANARY_SYNTHETIC RUN_DIR
 export SUMMARY_MAX_PARALLEL_LANES SUMMARY_BATCH_MAX_RECORDS
-export CANARY_MAX_CALLS POLL_SECONDS MAX_POLL_MINUTES
+export CANARY_MAX_CALLS POLL_SECONDS MAX_POLL_MINUTES CANARY_MAX_RECORDS
 
 python3 - <<'PY'
 from __future__ import annotations
@@ -131,6 +132,7 @@ EXPECTED_BATCH_MAX_RECORDS = int(os.environ["SUMMARY_BATCH_MAX_RECORDS"])
 CANARY_MAX_CALLS = int(os.environ["CANARY_MAX_CALLS"])
 POLL_SECONDS = int(os.environ["POLL_SECONDS"])
 MAX_POLL_MINUTES = int(os.environ["MAX_POLL_MINUTES"])
+CANARY_MAX_RECORDS = int(os.environ.get("CANARY_MAX_RECORDS", "0"))
 
 
 def now() -> str:
@@ -197,6 +199,10 @@ def build_summary_request(document_id: int) -> tuple[dict[str, Any], int]:
     records = require_get(f"{BACKEND_URL}/documents/{document_id}/records", timeout=120)
     if not isinstance(records, list) or not records:
         raise RuntimeError(f"Document {document_id} has no records")
+    total_count = len(records)
+    if CANARY_MAX_RECORDS > 0 and total_count > CANARY_MAX_RECORDS:
+        print(f"Real-document canary record limit active: using first {CANARY_MAX_RECORDS} of {total_count} records")
+        records = records[:CANARY_MAX_RECORDS]
     payload_records = [
         {
             "record_id": record["stable_id"],
