@@ -28,26 +28,29 @@ def _create_document_with_records(db_session, count=2):
 
 
 class FakeRemoteSummaryClient:
-    def __init__(self, *, status="completed", fail_last=False):
+    def __init__(self, *, status="completed", fail_last=False, provider="mock"):
         self.status = status
         self.fail_last = fail_last
+        self.provider = provider
         self.submitted_records = []
         self.document_id = None
         self.submit_calls = 0
         self.artifact_calls = 0
+        self.job_id = "remote-job-1"
 
     def submit_job(self, document_id, records):
         self.submit_calls += 1
         self.document_id = document_id
         self.submitted_records = records
-        return "remote-job-1"
+        self.job_id = f"remote-job-{self.submit_calls}"
+        return self.job_id
 
     def get_job_status(self, job_id):
-        assert job_id == "remote-job-1"
+        assert job_id == self.job_id
         return {"status": self.status}
 
     def get_job_artifact(self, job_id):
-        assert job_id == "remote-job-1"
+        assert job_id == self.job_id
         self.artifact_calls += 1
         artifact = []
         for index, record in enumerate(self.submitted_records):
@@ -56,11 +59,12 @@ class FakeRemoteSummaryClient:
                 {
                     "document_id": self.document_id,
                     "record_id": record["record_id"],
+                    "stable_id": record["stable_id"],
                     "source_hash": record["source_hash"],
                     "summary_text": "" if failed else f"Summary for {record['record_id']}",
                     "summary_style": "one_sentence",
-                    "provider": "error" if failed else "mock",
-                    "model": "mock-deterministic-v1",
+                    "provider": "error" if failed else self.provider,
+                    "model": "gemini-2.5-flash" if self.provider == "gemini" else "mock-deterministic-v1",
                     "template_version": "v1",
                     "status": "failed" if failed else "completed",
                     "error_code": "provider_error" if failed else None,
@@ -90,6 +94,7 @@ def test_import_summary_artifact(db_session):
     artifact = [{
         "document_id": str(doc.id),
         "record_id": rec.stable_id,
+        "stable_id": rec.stable_id,
         "source_hash": "rec_hash",
         "summary_text": "Valid summary.",
         "summary_style": "one_sentence",
@@ -115,6 +120,7 @@ def test_import_artifact_rejects_wrong_document_id(db_session):
     artifact = [{
         "document_id": "9999", # wrong
         "record_id": "1",
+        "stable_id": "1",
         "source_hash": "rec_hash",
         "summary_text": "Valid summary.",
         "status": "completed",
@@ -130,6 +136,7 @@ def test_import_artifact_rejects_unknown_record_id(db_session):
     artifact = [{
         "document_id": str(doc.id),
         "record_id": "9999", # wrong
+        "stable_id": "9999",
         "source_hash": "rec_hash",
         "summary_text": "Valid summary.",
         "status": "completed",
@@ -157,6 +164,7 @@ def test_import_artifact_rejects_source_hash_mismatch(db_session):
     artifact = [{
         "document_id": str(doc.id),
         "record_id": rec.stable_id,
+        "stable_id": rec.stable_id,
         "source_hash": "wrong_hash",
         "summary_text": "Valid summary.",
         "status": "completed",
@@ -165,11 +173,30 @@ def test_import_artifact_rejects_source_hash_mismatch(db_session):
     assert imported["imported"] == 0
 
 
+def test_import_artifact_rejects_stable_id_mismatch(db_session):
+    document, records = _create_document_with_records(db_session, count=1)
+    artifact = [{
+        "document_id": str(document.id),
+        "record_id": records[0].stable_id,
+        "stable_id": "wrong-stable-id",
+        "source_hash": records[0].source_hash,
+        "summary_text": "Valid summary.",
+        "provider": "gemini",
+        "status": "completed",
+    }]
+
+    imported = import_summary_artifact(db_session, document.id, artifact)
+
+    assert imported["imported"] == 0
+    assert imported["failed"] == 1
+
+
 def test_import_artifact_rejects_duplicate_record_ids(db_session):
     document, records = _create_document_with_records(db_session, count=1)
     line = {
         "document_id": str(document.id),
         "record_id": records[0].stable_id,
+        "stable_id": records[0].stable_id,
         "source_hash": records[0].source_hash,
         "summary_text": "Valid summary.",
         "provider": "mock",
@@ -217,6 +244,26 @@ def test_remote_summary_runner_imports_once_and_uses_checkpoints(db_session, mon
     assert importer_calls == 1
 
 
+def test_remote_gemini_runner_uses_provider_specific_checkpoints(db_session, monkeypatch):
+    document, records = _create_document_with_records(db_session)
+    client = FakeRemoteSummaryClient(provider="gemini")
+
+    monkeypatch.setenv("DEEPREADER_SUMMARY_BACKEND", "remote")
+    monkeypatch.setenv("DEEPREADER_ALLOW_REMOTE_SUMMARY_SERVICE", "true")
+    monkeypatch.setenv("SUMMARY_SERVICE_PROVIDER", "gemini")
+    monkeypatch.setattr(remote_client_module, "RemoteSummaryClient", lambda: client)
+
+    first_job = SummaryJobRunner().run_for_document(db_session, document.id)
+    second_job = SummaryJobRunner().run_for_document(db_session, document.id)
+    summaries = list_document_summaries(db_session, document.id)
+
+    assert first_job.status == "completed"
+    assert second_job.status == "completed"
+    assert client.submit_calls == 1
+    assert len(summaries) == len(records)
+    assert all(summary.summariser_name == "gemini" for summary in summaries)
+
+
 def test_remote_summary_runner_preserves_failed_artifact_state(db_session, monkeypatch):
     document, records = _create_document_with_records(db_session)
     client = FakeRemoteSummaryClient(status="failed", fail_last=True)
@@ -237,3 +284,110 @@ def test_remote_summary_runner_preserves_failed_artifact_state(db_session, monke
     assert len(summaries) == 1
     assert summaries[0].record_id == records[0].id
     assert "remote-job-1" in job.error_message
+
+
+def test_env_configured_remote_summary_polling_values(monkeypatch):
+    from deepreader.summarise.service import get_remote_max_polls, get_remote_poll_interval
+    monkeypatch.setenv("DEEPREADER_REMOTE_SUMMARY_MAX_POLLS", "150")
+    monkeypatch.setenv("DEEPREADER_REMOTE_SUMMARY_POLL_INTERVAL_SECONDS", "1.5")
+    assert get_remote_max_polls() == 150
+    assert get_remote_poll_interval() == 1.5
+
+
+def test_invalid_polling_env_values(monkeypatch):
+    from deepreader.summarise.service import get_remote_max_polls, get_remote_poll_interval
+    monkeypatch.setenv("DEEPREADER_REMOTE_SUMMARY_MAX_POLLS", "not_an_int")
+    monkeypatch.setenv("DEEPREADER_REMOTE_SUMMARY_POLL_INTERVAL_SECONDS", "not_a_float")
+    assert get_remote_max_polls() == 60
+    assert get_remote_poll_interval() == 2.0
+
+    monkeypatch.setenv("DEEPREADER_REMOTE_SUMMARY_MAX_POLLS", "-5")
+    monkeypatch.setenv("DEEPREADER_REMOTE_SUMMARY_POLL_INTERVAL_SECONDS", "-2.5")
+    assert get_remote_max_polls() == 60
+    assert get_remote_poll_interval() == 2.0
+
+
+def test_remote_summary_timeout_path_marks_job_failed(db_session, monkeypatch):
+    document, records = _create_document_with_records(db_session)
+    client = FakeRemoteSummaryClient(status="running")
+
+    monkeypatch.setenv("DEEPREADER_SUMMARY_BACKEND", "remote")
+    monkeypatch.setenv("DEEPREADER_ALLOW_REMOTE_SUMMARY_SERVICE", "true")
+    monkeypatch.setenv("DEEPREADER_REMOTE_SUMMARY_MAX_POLLS", "1")
+    monkeypatch.setenv("DEEPREADER_REMOTE_SUMMARY_POLL_INTERVAL_SECONDS", "0.001")
+    monkeypatch.setattr(remote_client_module, "RemoteSummaryClient", lambda: client)
+
+    job = SummaryJobRunner().run_for_document(db_session, document.id)
+    steps = list_job_steps(db_session, job.id)
+
+    assert job.status == "failed"
+    assert "did not finish before the polling timeout" in job.error_message
+    assert "remote-job-1" in job.error_message
+    assert all(step.status == "failed" for step in steps)
+
+
+def test_remote_summary_retry_reuses_completed_job(db_session, monkeypatch):
+    document, records = _create_document_with_records(db_session)
+    client_1 = FakeRemoteSummaryClient(status="running")
+    client_2 = FakeRemoteSummaryClient(status="completed")
+
+    monkeypatch.setenv("DEEPREADER_SUMMARY_BACKEND", "remote")
+    monkeypatch.setenv("DEEPREADER_ALLOW_REMOTE_SUMMARY_SERVICE", "true")
+    monkeypatch.setenv("DEEPREADER_REMOTE_SUMMARY_MAX_POLLS", "1")
+    monkeypatch.setenv("DEEPREADER_REMOTE_SUMMARY_POLL_INTERVAL_SECONDS", "0.001")
+
+    monkeypatch.setattr(remote_client_module, "RemoteSummaryClient", lambda: client_1)
+    runner = SummaryJobRunner()
+    job = runner.run_for_document(db_session, document.id)
+    assert job.status == "failed"
+
+    # client_2 needs to know what records client_1 submitted so it can return them in the artifact
+    client_2.submitted_records = client_1.submitted_records
+    client_2.document_id = client_1.document_id
+    monkeypatch.setattr(remote_client_module, "RemoteSummaryClient", lambda: client_2)
+    retried_job = runner.retry_failed_steps(db_session, job.id)
+
+    assert retried_job.status == "completed"
+    assert client_2.submit_calls == 0
+    assert client_2.artifact_calls == 1
+
+
+def test_remote_summary_retry_submits_new_job_if_reuse_fails(db_session, monkeypatch):
+    document, records = _create_document_with_records(db_session)
+    client_1 = FakeRemoteSummaryClient(status="running")
+
+    class BrokenStatusClient(FakeRemoteSummaryClient):
+        def get_job_status(self, job_id):
+            if job_id == "remote-job-1":
+                raise ValueError("Job not found in memory")
+            return {"status": "completed"}
+
+        def submit_job(self, document_id, records):
+            self.submit_calls += 1
+            self.document_id = document_id
+            self.submitted_records = records
+            self.job_id = "remote-job-2"
+            return self.job_id
+
+        def get_job_artifact(self, job_id):
+            assert job_id == "remote-job-2"
+            return super().get_job_artifact(job_id)
+
+    client_2 = BrokenStatusClient(status="completed")
+
+    monkeypatch.setenv("DEEPREADER_SUMMARY_BACKEND", "remote")
+    monkeypatch.setenv("DEEPREADER_ALLOW_REMOTE_SUMMARY_SERVICE", "true")
+    monkeypatch.setenv("DEEPREADER_REMOTE_SUMMARY_MAX_POLLS", "1")
+    monkeypatch.setenv("DEEPREADER_REMOTE_SUMMARY_POLL_INTERVAL_SECONDS", "0.001")
+
+    monkeypatch.setattr(remote_client_module, "RemoteSummaryClient", lambda: client_1)
+    runner = SummaryJobRunner()
+    job = runner.run_for_document(db_session, document.id)
+    assert job.status == "failed"
+
+    monkeypatch.setattr(remote_client_module, "RemoteSummaryClient", lambda: client_2)
+    retried_job = runner.retry_failed_steps(db_session, job.id)
+
+    assert retried_job.status == "completed"
+    assert client_2.submit_calls == 1
+    assert client_2.artifact_calls == 1

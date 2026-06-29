@@ -1,6 +1,6 @@
 # PDF and Paragraph Summary Service
 
-DeepReader v0.5 introduces PDF ingestion and an optional standalone mock summary service.
+DeepReader v0.5 introduces PDF ingestion and an optional standalone summary service. Mock mode remains the default; v0.6 adds explicitly enabled Gemini provider validation.
 
 ## PDF Ingestion
 
@@ -13,7 +13,7 @@ If a page has no extractable text, an empty/skipped page marker is created to ma
 The Paragraph Summary Service is an optional local service that handles asynchronous batch scheduling for remote-mode summaries.
 It uses quota lanes to pace concurrent batches.
 
-The service currently implements only a deterministic `mock` provider, so it needs no external API keys.
+The deterministic `mock` provider needs no external API keys and remains the default. An opt-in Gemini provider is documented in [GEMINI_PROVIDER_VALIDATION.md](GEMINI_PROVIDER_VALIDATION.md); it is double-gated and never runs in tests or CI.
 
 ### QuotaLane Scheduler
 
@@ -33,4 +33,4 @@ DEEPREADER_ALLOW_REMOTE_SUMMARY_SERVICE=true \
 docker compose up --build
 ```
 
-The paragraph service uses the `mock` provider, while the backend defaults to its local summariser unless both opt-in variables are set. The backend summary endpoint waits while it polls the service, and service job state is held only in memory. External providers are not implemented.
+The paragraph service uses the `mock` provider, while the backend defaults to its local summariser unless both opt-in variables are set. The backend summary endpoint waits while it polls the service, and service job state is held only in memory. Real Gemini validation requires the separate provider opt-in and lane credentials described in the v0.6 guide.

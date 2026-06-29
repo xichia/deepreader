@@ -91,11 +91,11 @@ async def test_validation_duplicate():
     batch = [InputRecord(record_id="r1", text="a", source_hash="a")]
     provider = MockFaultyProvider("duplicate")
     await _process_batch(job, batch, provider, "style")
-    # one valid result is taken, duplicate is warned and skipped
-    assert provider.call_count == 1
-    assert job.completed_records == 1
-    assert job.failed_records == 0
+    assert provider.call_count == 3
+    assert job.completed_records == 0
+    assert job.failed_records == 1
     assert len(job.artifact_lines) == 1
+    assert job.artifact_lines[0].error_code == "duplicate_record_id"
 
 @pytest.mark.asyncio
 async def test_validation_malformed():
@@ -158,4 +158,4 @@ async def test_scheduler_surfaces_unexpected_worker_failure(monkeypatch):
     assert len(job.artifact_lines) == 1
     assert job.artifact_lines[0].record_id == "r1"
     assert job.artifact_lines[0].status == "failed"
-    assert job.artifact_lines[0].error_code == "scheduler_error"
+    assert job.artifact_lines[0].error_code == "provider_exception"

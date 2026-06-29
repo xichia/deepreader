@@ -67,6 +67,14 @@ def import_summary_artifact(session: Session, document_id: int, artifact_lines: 
             continue
             
         record = record_map[record_id]
+
+        if line.get("stable_id") != record.stable_id:
+            msg = f"Artifact line stable_id mismatch for record {record_id}"
+            LOGGER.warning(msg)
+            stats["failed"] += 1
+            stats["errors"].append(msg)
+            stats["failed_record_ids"].append(record_id)
+            continue
         
         if line.get("source_hash") != record.source_hash:
             msg = f"Artifact line source_hash mismatch for record {record_id}"

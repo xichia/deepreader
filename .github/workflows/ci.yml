@@ -55,3 +55,25 @@ jobs:
       - name: Build frontend
         run: pnpm build
         working-directory: frontend
+
+  paragraph-summary-service:
+    name: Paragraph summary service tests
+    runs-on: ubuntu-latest
+    steps:
+      - name: Check out repository
+        uses: actions/checkout@v4
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: "3.11"
+          cache: pip
+          cache-dependency-path: services/paragraph-summary-service/requirements.txt
+
+      - name: Install paragraph summary service
+        run: python -m pip install -r requirements.txt
+        working-directory: services/paragraph-summary-service
+
+      - name: Run paragraph summary service tests
+        run: PYTHONPATH=. pytest
+        working-directory: services/paragraph-summary-service

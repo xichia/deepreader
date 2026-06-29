@@ -33,9 +33,42 @@ LOGGER = logging.getLogger(__name__)
 SUMMARY_JOB_TYPE = "record_summary"
 SUMMARY_STEP_TYPE = "summarise_record"
 SUMMARY_TARGET_TYPE = "document_record"
-REMOTE_SUMMARISER_NAME = "mock"
 REMOTE_MAX_POLLS = 60
 REMOTE_POLL_INTERVAL_SECONDS = 2
+
+
+def get_remote_max_polls() -> int:
+    val = os.getenv("DEEPREADER_REMOTE_SUMMARY_MAX_POLLS")
+    if val is not None:
+        try:
+            parsed = int(val)
+            if parsed <= 0:
+                raise ValueError("Must be a positive integer")
+            return parsed
+        except ValueError as exc:
+            LOGGER.warning(
+                "Invalid DEEPREADER_REMOTE_SUMMARY_MAX_POLLS %r: %s. Using default 60.",
+                val,
+                exc,
+            )
+    return 60
+
+
+def get_remote_poll_interval() -> float:
+    val = os.getenv("DEEPREADER_REMOTE_SUMMARY_POLL_INTERVAL_SECONDS")
+    if val is not None:
+        try:
+            parsed = float(val)
+            if parsed <= 0:
+                raise ValueError("Must be a positive float")
+            return parsed
+        except ValueError as exc:
+            LOGGER.warning(
+                "Invalid DEEPREADER_REMOTE_SUMMARY_POLL_INTERVAL_SECONDS %r: %s. Using default 2.0.",
+                val,
+                exc,
+            )
+    return 2.0
 
 
 class SummaryJobRunner:
@@ -102,57 +135,77 @@ class SummaryJobRunner:
         job: Job,
         records: list[DocumentRecord],
         steps: list[JobStep],
+        reuse_remote_job_id: str | None = None,
     ) -> Job:
         from deepreader.summarise.artifact_importer import import_summary_artifact
         from deepreader.summarise.remote_client import RemoteSummaryClient
 
         remote_job_id: str | None = None
         submitted_stable_ids: set[str] = set()
+        remote_summariser_name = os.getenv("SUMMARY_SERVICE_PROVIDER", "mock").strip().lower()
 
         try:
-            records_to_send = []
-            for record, step in zip(records, steps, strict=True):
-                set_job_step_status(session, step, JOB_STATUS_RUNNING, increment_attempt=True)
-                checkpoint = find_existing_summary_checkpoint(
-                    session,
-                    record=record,
-                    summariser_name=REMOTE_SUMMARISER_NAME,
-                )
-                if checkpoint is not None:
-                    set_job_step_status(session, step, JOB_STATUS_COMPLETED)
-                    continue
-
-                submitted_stable_ids.add(record.stable_id)
-                records_to_send.append(
-                    {
-                        "record_id": record.stable_id,
-                        "stable_id": record.stable_id,
-                        "source_ref": f"chapter {record.chapter_index}" if record.chapter_index is not None else None,
-                        "text": record.source_text,
-                        "source_hash": record.source_hash,
-                        "metadata": record.metadata_json,
-                    }
-                )
-
-            refresh_job_progress(session, job)
-            session.commit()
-
-            if not records_to_send:
-                set_job_status(session, job, JOB_STATUS_COMPLETED)
-                session.commit()
-                session.refresh(job)
-                return job
-
             client = RemoteSummaryClient()
-            remote_job_id = client.submit_job(str(job.document_id), records_to_send)
+            if reuse_remote_job_id:
+                try:
+                    status_data = client.get_job_status(reuse_remote_job_id)
+                    LOGGER.info("Successfully fetched status for remote job %s to reuse: %s", reuse_remote_job_id, status_data)
+                    remote_job_id = reuse_remote_job_id
+                except Exception as exc:
+                    LOGGER.warning("Could not reuse remote job %s: %s. Submitting a new job.", reuse_remote_job_id, exc)
+
+            if not remote_job_id:
+                records_to_send = []
+                for record, step in zip(records, steps, strict=True):
+                    set_job_step_status(session, step, JOB_STATUS_RUNNING, increment_attempt=True)
+                    checkpoint = find_existing_summary_checkpoint(
+                        session,
+                        record=record,
+                        summariser_name=remote_summariser_name,
+                    )
+                    if checkpoint is not None:
+                        set_job_step_status(session, step, JOB_STATUS_COMPLETED)
+                        continue
+
+                    submitted_stable_ids.add(record.stable_id)
+                    records_to_send.append(
+                        {
+                            "record_id": record.stable_id,
+                            "stable_id": record.stable_id,
+                            "source_ref": f"chapter {record.chapter_index}" if record.chapter_index is not None else None,
+                            "text": record.source_text,
+                            "source_hash": record.source_hash,
+                            "metadata": record.metadata_json,
+                        }
+                    )
+
+                refresh_job_progress(session, job)
+                session.commit()
+
+                if not records_to_send:
+                    set_job_status(session, job, JOB_STATUS_COMPLETED)
+                    session.commit()
+                    session.refresh(job)
+                    return job
+
+                remote_job_id = client.submit_job(str(job.document_id), records_to_send)
+            else:
+                for record, step in zip(records, steps, strict=True):
+                    set_job_step_status(session, step, JOB_STATUS_RUNNING, increment_attempt=True)
+                    submitted_stable_ids.add(record.stable_id)
+                refresh_job_progress(session, job)
+                session.commit()
+
+            remote_max_polls = get_remote_max_polls()
+            remote_poll_interval = get_remote_poll_interval()
 
             status_data: dict = {}
-            for poll_number in range(REMOTE_MAX_POLLS):
+            for poll_number in range(remote_max_polls):
                 status_data = client.get_job_status(remote_job_id)
                 if status_data.get("status") in {"completed", "failed"}:
                     break
-                if poll_number < REMOTE_MAX_POLLS - 1:
-                    time.sleep(REMOTE_POLL_INTERVAL_SECONDS)
+                if poll_number < remote_max_polls - 1:
+                    time.sleep(remote_poll_interval)
             else:
                 raise TimeoutError(f"Remote summary job {remote_job_id} did not finish before the polling timeout.")
 
@@ -179,12 +232,20 @@ class SummaryJobRunner:
                 elif record.stable_id in imported_ids or record.stable_id in skipped_ids:
                     set_job_step_status(session, step, JOB_STATUS_COMPLETED)
                 else:
-                    set_job_step_status(
+                    checkpoint = find_existing_summary_checkpoint(
                         session,
-                        step,
-                        JOB_STATUS_FAILED,
-                        error_message="Remote summary artifact did not contain this record.",
+                        record=record,
+                        summariser_name=remote_summariser_name,
                     )
+                    if checkpoint is not None:
+                        set_job_step_status(session, step, JOB_STATUS_COMPLETED)
+                    else:
+                        set_job_step_status(
+                            session,
+                            step,
+                            JOB_STATUS_FAILED,
+                            error_message="Remote summary artifact did not contain this record.",
+                        )
 
             refresh_job_progress(session, job)
             if job.failed_steps or remote_failed or import_stats["failed"]:
@@ -227,9 +288,56 @@ class SummaryJobRunner:
         if not failed_steps:
             return job
 
+        import re
+        reuse_remote_job_id = None
+        if job.error_message:
+            match = re.search(r"Remote summary job ([a-zA-Z0-9\-_]+)", job.error_message)
+            if match:
+                reuse_remote_job_id = match.group(1)
+
         LOGGER.info("Retrying %s failed summary steps for job %s", len(failed_steps), job.id)
         set_job_status(session, job, JOB_STATUS_RUNNING)
         session.commit()
+
+        backend = os.getenv("DEEPREADER_SUMMARY_BACKEND", "local")
+        allow_remote = os.getenv("DEEPREADER_ALLOW_REMOTE_SUMMARY_SERVICE", "false").lower() == "true"
+
+        if backend == "remote" and allow_remote:
+            failed_records = []
+            failed_steps_to_retry = []
+            for step in failed_steps:
+                record = get_document_record(session, step.target_id)
+                if record is None:
+                    set_job_step_status(
+                        session,
+                        step,
+                        JOB_STATUS_FAILED,
+                        error_message=f"Target record {step.target_id} no longer exists.",
+                        increment_attempt=True,
+                    )
+                    refresh_job_progress(session, job)
+                    session.commit()
+                    continue
+                failed_records.append(record)
+                failed_steps_to_retry.append(step)
+
+            if not failed_records:
+                refresh_job_progress(session, job)
+                if job.failed_steps:
+                    set_job_status(session, job, JOB_STATUS_FAILED, error_message="One or more summary steps failed.")
+                else:
+                    set_job_status(session, job, JOB_STATUS_COMPLETED)
+                session.commit()
+                session.refresh(job)
+                return job
+
+            return self._run_remote_job(
+                session,
+                job,
+                failed_records,
+                failed_steps_to_retry,
+                reuse_remote_job_id=reuse_remote_job_id,
+            )
 
         for step in failed_steps:
             record = get_document_record(session, step.target_id)

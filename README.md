@@ -34,7 +34,7 @@ It is intentionally not a chatbot wrapper. The dashboard exposes records, scores
 - Source-preserving BM25 retrieval over original document text.
 - Local vector-style retrieval and simple fusion for comparison.
 - Deterministic local summaries with checkpointing.
-- Optional standalone Paragraph Summary Service with deterministic mock summaries and asynchronous batch scheduling.
+- Optional standalone Paragraph Summary Service with deterministic mock summaries, explicitly enabled Gemini validation, and asynchronous batch scheduling.
 - Processing jobs and job steps for summary generation.
 - Summary-aware search with visible retrieval methods and component scores.
 - Deterministic extractive QA with citations, evidence packets, and retrieval settings.
@@ -42,7 +42,7 @@ It is intentionally not a chatbot wrapper. The dashboard exposes records, scores
 - Docker Compose setup for a no-secrets local demo.
 - Backend tests and frontend build in GitHub Actions CI.
 
-No API keys are required. The local summariser and QA flow are deterministic placeholders for pipeline verification; they do not call OpenAI, Gemini, or any paid external API.
+No API keys are required for the default workflow. The local summariser, mock paragraph provider, and QA flow are deterministic; the optional Gemini paragraph provider is disabled unless both provider selection and provider-call opt-in are set.
 
 ## Architecture
 
@@ -139,7 +139,7 @@ Generating summaries for a document creates a `record_summary` job and one `summ
 
 Checkpointing is based on `record_id`, `summariser_name`, and `source_hash`. Rerunning summary generation skips unchanged records that already have a matching summary. If a record source hash changes, a new current summary is created and prior source text remains untouched.
 
-The local summariser is `local_extractive_v1`: it normalises whitespace, selects deterministic text, truncates predictably, and stores summary/source hashes. The optional Paragraph Summary Service currently implements only the deterministic `mock` provider and returns JSON artifacts; external providers are not implemented.
+The local summariser is `local_extractive_v1`: it normalises whitespace, selects deterministic text, truncates predictably, and stores summary/source hashes. The optional Paragraph Summary Service defaults to the deterministic `mock` provider and returns JSON artifacts. The v0.6 Gemini provider is an explicit, capped validation path; see [docs/GEMINI_PROVIDER_VALIDATION.md](docs/GEMINI_PROVIDER_VALIDATION.md).
 
 ## Search And QA
 
@@ -209,7 +209,7 @@ Docker config:
 docker compose config
 ```
 
-GitHub Actions runs backend install/tests and frontend install/build without secrets.
+GitHub Actions runs backend and paragraph-service tests plus the frontend build without secrets or real provider calls.
 
 ## Configuration
 
@@ -226,7 +226,7 @@ The default CORS origins are local-only. Uploaded file content and secrets are n
 - SQLite is the only configured persistence layer.
 - Text, EPUB, and PDF are supported; real OCR is not implemented for scanned PDFs.
 - The backend summary request remains synchronous in both modes; the paragraph service schedules its internal batches asynchronously while the backend polls.
-- Paragraph-service jobs are in-memory, non-durable, and mock-provider-only.
+- Paragraph-service jobs are in-memory and non-durable; Gemini mode is validation-only and disabled by default.
 - The local summariser is deterministic and extractive, not an LLM summary.
 - The local vector-style retriever is not embeddings and should not be treated as semantic search.
 - Fusion is intentionally simple.
@@ -236,7 +236,7 @@ The default CORS origins are local-only. Uploaded file content and secrets are n
 ## Roadmap
 
 - Add a short demo video.
-- Add optional provider-backed summaries behind disabled-by-default configuration.
+- Validate optional provider-backed summaries conservatively before expanding the workflow.
 - Add real embeddings and hybrid retrieval in a later milestone.
 - Add richer job retry/checkpoint inspection.
 - Add exportable evidence packets for reviewer handoff.
