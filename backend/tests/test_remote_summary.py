@@ -28,9 +28,10 @@ def _create_document_with_records(db_session, count=2):
 
 
 class FakeRemoteSummaryClient:
-    def __init__(self, *, status="completed", fail_last=False):
+    def __init__(self, *, status="completed", fail_last=False, provider="mock"):
         self.status = status
         self.fail_last = fail_last
+        self.provider = provider
         self.submitted_records = []
         self.document_id = None
         self.submit_calls = 0
@@ -56,11 +57,12 @@ class FakeRemoteSummaryClient:
                 {
                     "document_id": self.document_id,
                     "record_id": record["record_id"],
+                    "stable_id": record["stable_id"],
                     "source_hash": record["source_hash"],
                     "summary_text": "" if failed else f"Summary for {record['record_id']}",
                     "summary_style": "one_sentence",
-                    "provider": "error" if failed else "mock",
-                    "model": "mock-deterministic-v1",
+                    "provider": "error" if failed else self.provider,
+                    "model": "gemini-2.5-flash" if self.provider == "gemini" else "mock-deterministic-v1",
                     "template_version": "v1",
                     "status": "failed" if failed else "completed",
                     "error_code": "provider_error" if failed else None,
@@ -90,6 +92,7 @@ def test_import_summary_artifact(db_session):
     artifact = [{
         "document_id": str(doc.id),
         "record_id": rec.stable_id,
+        "stable_id": rec.stable_id,
         "source_hash": "rec_hash",
         "summary_text": "Valid summary.",
         "summary_style": "one_sentence",
@@ -115,6 +118,7 @@ def test_import_artifact_rejects_wrong_document_id(db_session):
     artifact = [{
         "document_id": "9999", # wrong
         "record_id": "1",
+        "stable_id": "1",
         "source_hash": "rec_hash",
         "summary_text": "Valid summary.",
         "status": "completed",
@@ -130,6 +134,7 @@ def test_import_artifact_rejects_unknown_record_id(db_session):
     artifact = [{
         "document_id": str(doc.id),
         "record_id": "9999", # wrong
+        "stable_id": "9999",
         "source_hash": "rec_hash",
         "summary_text": "Valid summary.",
         "status": "completed",
@@ -157,6 +162,7 @@ def test_import_artifact_rejects_source_hash_mismatch(db_session):
     artifact = [{
         "document_id": str(doc.id),
         "record_id": rec.stable_id,
+        "stable_id": rec.stable_id,
         "source_hash": "wrong_hash",
         "summary_text": "Valid summary.",
         "status": "completed",
@@ -165,11 +171,30 @@ def test_import_artifact_rejects_source_hash_mismatch(db_session):
     assert imported["imported"] == 0
 
 
+def test_import_artifact_rejects_stable_id_mismatch(db_session):
+    document, records = _create_document_with_records(db_session, count=1)
+    artifact = [{
+        "document_id": str(document.id),
+        "record_id": records[0].stable_id,
+        "stable_id": "wrong-stable-id",
+        "source_hash": records[0].source_hash,
+        "summary_text": "Valid summary.",
+        "provider": "gemini",
+        "status": "completed",
+    }]
+
+    imported = import_summary_artifact(db_session, document.id, artifact)
+
+    assert imported["imported"] == 0
+    assert imported["failed"] == 1
+
+
 def test_import_artifact_rejects_duplicate_record_ids(db_session):
     document, records = _create_document_with_records(db_session, count=1)
     line = {
         "document_id": str(document.id),
         "record_id": records[0].stable_id,
+        "stable_id": records[0].stable_id,
         "source_hash": records[0].source_hash,
         "summary_text": "Valid summary.",
         "provider": "mock",
@@ -215,6 +240,26 @@ def test_remote_summary_runner_imports_once_and_uses_checkpoints(db_session, mon
     assert client.submit_calls == 1
     assert client.artifact_calls == 1
     assert importer_calls == 1
+
+
+def test_remote_gemini_runner_uses_provider_specific_checkpoints(db_session, monkeypatch):
+    document, records = _create_document_with_records(db_session)
+    client = FakeRemoteSummaryClient(provider="gemini")
+
+    monkeypatch.setenv("DEEPREADER_SUMMARY_BACKEND", "remote")
+    monkeypatch.setenv("DEEPREADER_ALLOW_REMOTE_SUMMARY_SERVICE", "true")
+    monkeypatch.setenv("SUMMARY_SERVICE_PROVIDER", "gemini")
+    monkeypatch.setattr(remote_client_module, "RemoteSummaryClient", lambda: client)
+
+    first_job = SummaryJobRunner().run_for_document(db_session, document.id)
+    second_job = SummaryJobRunner().run_for_document(db_session, document.id)
+    summaries = list_document_summaries(db_session, document.id)
+
+    assert first_job.status == "completed"
+    assert second_job.status == "completed"
+    assert client.submit_calls == 1
+    assert len(summaries) == len(records)
+    assert all(summary.summariser_name == "gemini" for summary in summaries)
 
 
 def test_remote_summary_runner_preserves_failed_artifact_state(db_session, monkeypatch):

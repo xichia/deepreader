@@ -1,13 +1,77 @@
+"""Environment-backed paragraph summary service settings."""
+
+from __future__ import annotations
+
 import os
-from pydantic import BaseModel
+
+from pydantic import BaseModel, Field
+
+
+def _env_bool(name: str, default: bool = False) -> bool:
+    value = os.getenv(name)
+    if value is None:
+        return default
+    return value.strip().lower() in {"1", "true", "yes", "on"}
+
 
 class Settings(BaseModel):
-    summary_service_provider: str = os.getenv("SUMMARY_SERVICE_PROVIDER", "mock")
-    summary_service_model: str = os.getenv("SUMMARY_SERVICE_MODEL", "mock-deterministic-v1")
-    summary_batch_target_tokens: int = int(os.getenv("SUMMARY_BATCH_TARGET_TOKENS", "240000"))
-    summary_batch_hard_max_tokens: int = int(os.getenv("SUMMARY_BATCH_HARD_MAX_TOKENS", "250000"))
-    summary_lane_count: int = int(os.getenv("SUMMARY_LANE_COUNT", "10"))
-    summary_lane_rpm: int = int(os.getenv("SUMMARY_LANE_RPM", "1"))
-    summary_template_version: str = os.getenv("SUMMARY_TEMPLATE_VERSION", "paragraph_one_sentence_v1")
+    summary_service_provider: str = Field(
+        default_factory=lambda: os.getenv("SUMMARY_SERVICE_PROVIDER", "mock").strip().lower()
+    )
+    summary_service_enable_provider_calls: bool = Field(
+        default_factory=lambda: _env_bool("SUMMARY_SERVICE_ENABLE_PROVIDER_CALLS")
+    )
+    summary_service_model: str = Field(
+        default_factory=lambda: os.getenv("SUMMARY_SERVICE_MODEL", "gemini-2.5-flash").strip()
+    )
+    summary_template_version: str = Field(
+        default_factory=lambda: os.getenv(
+            "SUMMARY_TEMPLATE_VERSION", "paragraph_one_sentence_v1"
+        ).strip()
+    )
+
+    summary_lane_count: int = Field(
+        default_factory=lambda: int(os.getenv("SUMMARY_LANE_COUNT", "10"))
+    )
+    summary_lane_rpm: int = Field(
+        default_factory=lambda: int(os.getenv("SUMMARY_LANE_RPM", "1"))
+    )
+    summary_max_parallel_lanes: int = Field(
+        default_factory=lambda: int(os.getenv("SUMMARY_MAX_PARALLEL_LANES", "10"))
+    )
+
+    summary_batch_target_tokens: int = Field(
+        default_factory=lambda: int(os.getenv("SUMMARY_BATCH_TARGET_TOKENS", "5000"))
+    )
+    summary_batch_hard_max_tokens: int = Field(
+        default_factory=lambda: int(os.getenv("SUMMARY_BATCH_HARD_MAX_TOKENS", "10000"))
+    )
+    summary_batch_reserved_output_tokens: int = Field(
+        default_factory=lambda: int(os.getenv("SUMMARY_BATCH_RESERVED_OUTPUT_TOKENS", "2000"))
+    )
+    summary_max_provider_calls_per_job: int = Field(
+        default_factory=lambda: int(os.getenv("SUMMARY_MAX_PROVIDER_CALLS_PER_JOB", "10"))
+    )
+    summary_max_input_tokens_per_job: int = Field(
+        default_factory=lambda: int(os.getenv("SUMMARY_MAX_INPUT_TOKENS_PER_JOB", "50000"))
+    )
+
+    def lane_credential_env_names(self) -> list[str]:
+        """Return the configured lane variable names without reading key values."""
+
+        return [f"GEMINI_API_KEY_LANE_{index:02d}" for index in range(1, self.summary_lane_count + 1)]
+
+    def safe_summary(self) -> dict[str, str | int | bool]:
+        """Return non-secret settings suitable for diagnostics."""
+
+        return {
+            "provider": self.summary_service_provider,
+            "provider_calls_enabled": self.summary_service_enable_provider_calls,
+            "model": self.summary_service_model,
+            "lane_count": self.summary_lane_count,
+            "lane_rpm": self.summary_lane_rpm,
+            "max_parallel_lanes": self.summary_max_parallel_lanes,
+        }
+
 
 settings = Settings()

@@ -33,7 +33,6 @@ LOGGER = logging.getLogger(__name__)
 SUMMARY_JOB_TYPE = "record_summary"
 SUMMARY_STEP_TYPE = "summarise_record"
 SUMMARY_TARGET_TYPE = "document_record"
-REMOTE_SUMMARISER_NAME = "mock"
 REMOTE_MAX_POLLS = 60
 REMOTE_POLL_INTERVAL_SECONDS = 2
 
@@ -108,6 +107,7 @@ class SummaryJobRunner:
 
         remote_job_id: str | None = None
         submitted_stable_ids: set[str] = set()
+        remote_summariser_name = os.getenv("SUMMARY_SERVICE_PROVIDER", "mock").strip().lower()
 
         try:
             records_to_send = []
@@ -116,7 +116,7 @@ class SummaryJobRunner:
                 checkpoint = find_existing_summary_checkpoint(
                     session,
                     record=record,
-                    summariser_name=REMOTE_SUMMARISER_NAME,
+                    summariser_name=remote_summariser_name,
                 )
                 if checkpoint is not None:
                     set_job_step_status(session, step, JOB_STATUS_COMPLETED)

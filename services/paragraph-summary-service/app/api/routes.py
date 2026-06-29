@@ -3,8 +3,15 @@ from pydantic import BaseModel
 from typing import Any
 import uuid
 
-from app.records.schema import SummaryRequest, SummaryArtifactLine
-from app.scheduler.dispatcher import _run_job_background, get_job, JobState, JOBS
+from app.records.schema import SummaryRequest
+from app.scheduler.dispatcher import (
+    JOBS,
+    JobState,
+    ProviderConfigurationError,
+    _run_job_background,
+    get_job,
+    validate_provider_configuration,
+)
 
 router = APIRouter()
 
@@ -20,6 +27,7 @@ class JobStatusResponse(BaseModel):
     failed_records: int
     total_records: int
     stats: dict[str, Any]
+    error: str | None
 
 @router.post("/paragraph-summaries", response_model=JobResponse, status_code=status.HTTP_202_ACCEPTED)
 async def submit_summary_job(request: SummaryRequest, background_tasks: BackgroundTasks):
@@ -28,6 +36,10 @@ async def submit_summary_job(request: SummaryRequest, background_tasks: Backgrou
     record_ids = [record.record_id for record in request.records]
     if len(record_ids) != len(set(record_ids)):
         raise HTTPException(status_code=400, detail="Duplicate record_id values are not allowed")
+    try:
+        validate_provider_configuration()
+    except ProviderConfigurationError as exc:
+        raise HTTPException(status_code=503, detail=str(exc)) from exc
     
     job_id = str(uuid.uuid4())
     job = JobState(job_id, request.document_id, len(request.records))
@@ -48,6 +60,7 @@ def read_job_status(job_id: str):
         failed_records=job.failed_records,
         total_records=job.total_records,
         stats=job.stats,
+        error=job.error,
     )
 
 @router.get("/jobs/{job_id}/artifact")
@@ -64,4 +77,8 @@ def read_job_artifact(job_id: str):
 @router.get("/health")
 def health_check():
     from app.config import settings
-    return {"status": "ok", "provider": settings.summary_service_provider}
+    return {
+        "status": "ok",
+        "provider": settings.summary_service_provider,
+        "model": settings.summary_service_model,
+    }

@@ -1,5 +1,5 @@
 from abc import ABC, abstractmethod
-from typing import Any
+
 from app.records.schema import InputRecord, SummaryArtifactLine
 
 class BaseProvider(ABC):

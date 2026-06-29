@@ -1,5 +1,6 @@
 from typing import Any, Optional
-from pydantic import BaseModel
+
+from pydantic import BaseModel, Field
 
 class RecordMetadata(BaseModel):
     page: Optional[int] = None
@@ -12,7 +13,7 @@ class InputRecord(BaseModel):
     source_ref: Optional[str] = None
     text: str
     source_hash: str
-    metadata: RecordMetadata = RecordMetadata()
+    metadata: RecordMetadata = Field(default_factory=RecordMetadata)
 
 class SummaryRequest(BaseModel):
     document_id: str
@@ -32,5 +33,5 @@ class SummaryArtifactLine(BaseModel):
     template_version: str
     status: str
     error_code: Optional[str] = None
-    usage: dict[str, Any] = {}
+    usage: dict[str, Any] = Field(default_factory=dict)
     created_at: str
