@@ -162,6 +162,17 @@ class RecordSummary(Base):
     summariser_name: Mapped[str] = mapped_column(String(100), nullable=False)
     summary_hash: Mapped[str] = mapped_column(String(64), nullable=False)
     source_hash: Mapped[str] = mapped_column(String(64), nullable=False)
+    
+    # Remote service fields
+    summary_style: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    provider: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    model: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    template_version: Mapped[str | None] = mapped_column(String(100), nullable=True)
+    artifact_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    status: Mapped[str] = mapped_column(String(50), nullable=False, default="completed")
+    error_code: Mapped[str | None] = mapped_column(String(50), nullable=True)
+    usage_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
+    
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
 
     document: Mapped[Document] = relationship(back_populates="summaries")

@@ -454,6 +454,19 @@ code {
   margin-top: 10px;
 }
 
+.record-content {
+  display: grid;
+  grid-template-columns: 1fr 1fr;
+  gap: 16px;
+  align-items: start;
+}
+
+@media (max-width: 760px) {
+  .record-content {
+    grid-template-columns: 1fr;
+  }
+}
+
 .summary-box {
   border: 1px solid #c9dfd4;
   border-radius: 8px;

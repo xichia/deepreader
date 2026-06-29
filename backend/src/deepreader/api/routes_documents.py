@@ -158,6 +158,37 @@ async def ingest_epub_upload(
     return IngestResponse(document=document_detail_out(document, len(parsed_document.records)))
 
 
+@router.post("/ingest/pdf", response_model=IngestResponse, status_code=status.HTTP_201_CREATED)
+async def ingest_pdf_upload(
+    request: Request,
+    file: UploadFile = File(...),
+    session: Session = Depends(get_session),
+) -> IngestResponse:
+    from deepreader.ingest.pdf_parser import parse_pdf_document
+
+    filename = validate_upload_filename(file.filename, {".pdf"})
+    data = await read_upload_bytes(file, request.app.state.upload_max_bytes)
+    LOGGER.info("Accepted PDF upload filename=%s bytes=%s", filename, len(data))
+
+    try:
+        parsed_document = parse_pdf_document(data, title=filename)
+    except Exception as exc:
+        raise HTTPException(
+            status_code=status.HTTP_400_BAD_REQUEST,
+            detail="PDF upload could not be parsed.",
+        ) from exc
+
+    document = ingest_parsed_document(
+        session,
+        parsed_document=parsed_document,
+        source_filename=filename,
+        source_type="pdf",
+        source_bytes=data,
+    )
+    LOGGER.info("Stored PDF document document_id=%s records=%s", document.id, len(parsed_document.records))
+    return IngestResponse(document=document_detail_out(document, len(parsed_document.records)))
+
+
 @router.get("", response_model=list[DocumentOut])
 def get_documents(session: Session = Depends(get_session)) -> list[DocumentOut]:
     return [document_out(document) for document in list_documents(session)]

@@ -138,7 +138,10 @@ function uploadEndpointForFile(file: File): string {
   if (filename.endsWith(".epub")) {
     return "/documents/ingest/epub";
   }
-  throw new Error("Only .txt and .epub uploads are supported.");
+  if (filename.endsWith(".pdf")) {
+    return "/documents/ingest/pdf";
+  }
+  throw new Error("Only .txt, .epub, and .pdf uploads are supported.");
 }
 
 export { API_BASE_URL };

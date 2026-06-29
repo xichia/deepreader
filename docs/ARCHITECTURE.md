@@ -9,21 +9,27 @@ React dashboard
   -> FastAPI routes
     -> SQLAlchemy repositories
       -> SQLite
+    -> optional paragraph-summary-service
+      -> asynchronous in-memory mock batches
 ```
 
-Processing components are synchronous today. Jobs and job steps are still stored so reviewers can inspect progress and failures, and so a later background worker can reuse the same model.
+The backend summary endpoint is synchronous in both modes. Local summaries run inline; remote mode submits to the optional paragraph service and polls until its asynchronous in-memory batches finish. Backend jobs and job steps are persisted so reviewers can inspect progress and failures.
 
 ## Backend Modules
 
 - `deepreader.api`: HTTP routes, request models, and response models.
 - `deepreader.api.upload_safety`: filename, extension, and upload size checks.
-- `deepreader.ingest`: text and EPUB parsing into deterministic records.
+- `deepreader.ingest`: text, EPUB, and PDF parsing into deterministic records.
 - `deepreader.records`: stable IDs, hashing, and metadata helpers.
 - `deepreader.storage`: SQLAlchemy models, database setup, and repositories.
-- `deepreader.summarise`: deterministic local summariser, checkpoints, and job runner.
+- `deepreader.summarise`: deterministic local summariser, remote service client, artifacts, and job runner.
 - `deepreader.retrieval`: BM25, local vector-style retrieval, schema conversion, and fusion.
 - `deepreader.answer`: extractive answer selection, citations, and evidence packets.
 - `deepreader.security`: lightweight redaction utilities for future sensitive configuration.
+
+## Related Services
+
+- `services/paragraph-summary-service`: Optional mock-only batch scheduling with quota lanes; its job registry is in-memory and non-durable.
 
 ## Frontend Panels
 
@@ -37,15 +43,16 @@ Processing components are synchronous today. Jobs and job steps are still stored
 
 ## Data Flow
 
-1. Upload `.txt` or `.epub`.
+1. Upload `.txt`, `.epub`, or `.pdf`.
 2. Backend validates filename, extension, and size.
 3. Parser creates ordered records.
 4. Repository stores document and records in SQLite.
 5. Stable IDs are derived deterministically from source hash and record position.
 6. Summary runner creates a job and one step per record.
 7. Existing matching summaries are treated as checkpoints.
-8. Search converts records and summaries into retrieval items.
-9. QA consumes retrieval results as evidence packets and returns extractive citations.
+8. In opt-in remote mode, the backend submits only records without mock-provider checkpoints, polls the paragraph service, validates and imports one artifact, and maps each artifact result back to its job step.
+9. Search converts records and summaries into retrieval items.
+10. QA consumes retrieval results as evidence packets and returns extractive citations.
 
 ## Important Data Contracts
 
@@ -91,6 +98,7 @@ Retrieval and QA surfaces keep these inspectable fields:
 
 - SQLite keeps local setup simple.
 - Synchronous processing keeps the milestone reviewable without Celery or Redis.
+- The optional paragraph service adds asynchronous batching but not durable background processing; the backend waits for it.
 - Deterministic summaries and extractive QA make tests reproducible.
 - Duplicate ingest is allowed and documented.
 - Local vector-style retrieval is a lexical approximation, not embeddings.

@@ -62,18 +62,20 @@ function DocumentRecords({
                 <span>order {record.order_index}</span>
               </div>
               {record.section_title ? <h3>{record.section_title}</h3> : null}
-              {summary ? (
-                <div className="summary-box">
-                  <div className="text-label">summary</div>
-                  <p>{summary.summary_text}</p>
-                  <code>{summary.summariser_name}</code>
+              <div className="record-content">
+                <div className="source-box">
+                  <div className="text-label">source text</div>
+                  <p className="source-text">{record.source_text}</p>
                 </div>
-              ) : (
-                <p className="inline-note">No current summary. Generate summaries for this document to fill this field.</p>
-              )}
-              <div className="source-box">
-                <div className="text-label">source text</div>
-                <p className="source-text">{record.source_text}</p>
+                {summary ? (
+                  <div className="summary-box">
+                    <div className="text-label">summary</div>
+                    <p>{summary.summary_text}</p>
+                    <code>{summary.summariser_name}</code>
+                  </div>
+                ) : (
+                  <p className="inline-note">No current summary. Generate summaries for this document to fill this field.</p>
+                )}
               </div>
             </article>
           );

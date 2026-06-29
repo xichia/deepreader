@@ -34,7 +34,12 @@ def test_qa_api_returns_answer_citations_and_evidence(client: TestClient, exampl
     assert payload["evidence"]
     assert payload["retrieval_settings"]["use_local_vector"] is True
     assert all(citation["stable_id"] for citation in payload["citations"])
-    assert all(evidence["source_text"] for evidence in payload["evidence"])
+    assert all("quoted_text" in citation for citation in payload["citations"])
+    
+    for evidence in payload["evidence"]:
+        assert evidence["source_text"]
+        # Ensure we are returning source text
+        assert "source_text" in evidence
 
 
 def test_qa_api_rejects_disabled_retrieval_targets(client: TestClient) -> None:

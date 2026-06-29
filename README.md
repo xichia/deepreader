@@ -28,12 +28,13 @@ It is intentionally not a chatbot wrapper. The dashboard exposes records, scores
 
 ## Core Features
 
-- Text and EPUB ingestion through a FastAPI backend.
+- Text, EPUB, and PDF ingestion through a FastAPI backend.
 - SQLite persistence for local, reproducible demos.
 - Deterministic document records with stable IDs and source hashes.
 - Source-preserving BM25 retrieval over original document text.
 - Local vector-style retrieval and simple fusion for comparison.
 - Deterministic local summaries with checkpointing.
+- Optional standalone Paragraph Summary Service with deterministic mock summaries and asynchronous batch scheduling.
 - Processing jobs and job steps for summary generation.
 - Summary-aware search with visible retrieval methods and component scores.
 - Deterministic extractive QA with citations, evidence packets, and retrieval settings.
@@ -46,9 +47,9 @@ No API keys are required. The local summariser and QA flow are deterministic pla
 ## Architecture
 
 - `backend/src/deepreader/api`: FastAPI routes and response schemas.
-- `backend/src/deepreader/ingest`: text and EPUB parsing.
+- `backend/src/deepreader/ingest`: text, EPUB, and PDF parsing.
 - `backend/src/deepreader/storage`: SQLAlchemy models and repositories.
-- `backend/src/deepreader/summarise`: local summariser, checkpointing, and summary job runner.
+- `backend/src/deepreader/summarise`: local summariser, remote service client, artifacts, and summary job runner.
 - `backend/src/deepreader/retrieval`: BM25, local vector-style retrieval, and fusion.
 - `backend/src/deepreader/answer`: extractive QA, evidence packets, and citations.
 - `frontend/src`: dashboard panels for uploads, documents, records, jobs, search, and QA.
@@ -91,17 +92,20 @@ Then open `http://127.0.0.1:5173`.
 Docker Compose runs:
 
 - backend on `http://127.0.0.1:8000`
+- paragraph-summary-service on `http://127.0.0.1:8001`
 - frontend on `http://127.0.0.1:5173`
 - SQLite in a named local volume, mounted at `/app/data` in the backend container
 
 No secrets or external services are required.
+
+The backend uses its deterministic local summariser by default even though the paragraph service is running. To exercise the mock remote path, set both `DEEPREADER_SUMMARY_BACKEND=remote` and `DEEPREADER_ALLOW_REMOTE_SUMMARY_SERVICE=true` before starting Compose.
 
 ## Demo Workflow
 
 Use [docs/DEMO_WORKFLOW.md](docs/DEMO_WORKFLOW.md) for a step-by-step reviewer script. The short version:
 
 1. Start backend and frontend locally, or run Docker Compose.
-2. Upload `examples/simple_manual.txt`.
+2. Upload `examples/simple_manual.txt` or a PDF.
 3. Select the document and inspect records, stable IDs, and source text.
 4. Search for `what causes low flow?`.
 5. Generate summaries and inspect the processing job.
@@ -112,7 +116,7 @@ Use [docs/DEMO_WORKFLOW.md](docs/DEMO_WORKFLOW.md) for a step-by-step reviewer s
 
 Reviewer checklist:
 
-- Uploads accept `.txt` and `.epub` and reject unsafe filenames/extensions.
+- Uploads accept `.txt`, `.epub`, and `.pdf`, and reject unsafe filenames/extensions.
 - Source records remain visible and unchanged.
 - Stable IDs make records traceable across retrieval, summaries, citations, and jobs.
 - Search results show scores, retrieval methods, metadata, summaries, and source text.
@@ -125,21 +129,17 @@ Dashboard uploads use the real API:
 
 - `POST /documents/ingest/text` for `.txt`
 - `POST /documents/ingest/epub` for `.epub`
+- `POST /documents/ingest/pdf` for `.pdf`
 
 The backend enforces local filename safety checks, extension allowlists, and upload size limits. Duplicate ingest currently creates another document row, while deterministic record stable IDs are reused for identical content. That behavior is intentional for now and tested.
 
 ## Jobs, Summaries, And Checkpointing
 
-Generating summaries for a document creates a `record_summary` job and one `summarise_record` step per record. The job runner is synchronous today, but it stores background-style progress:
-
-- `pending`
-- `running`
-- `completed`
-- `failed`
+Generating summaries for a document creates a `record_summary` job and one `summarise_record` step per record. The backend endpoint is synchronous: local extraction runs inline, while the opt-in remote path submits work to `paragraph-summary-service`, polls it to completion, imports the artifact once, and then returns the persisted job.
 
 Checkpointing is based on `record_id`, `summariser_name`, and `source_hash`. Rerunning summary generation skips unchanged records that already have a matching summary. If a record source hash changes, a new current summary is created and prior source text remains untouched.
 
-The summariser is `local_extractive_v1`: it normalises whitespace, selects deterministic text, truncates predictably, and stores summary/source hashes. It is not meant to be high-quality AI prose.
+The local summariser is `local_extractive_v1`: it normalises whitespace, selects deterministic text, truncates predictably, and stores summary/source hashes. The optional Paragraph Summary Service currently implements only the deterministic `mock` provider and returns JSON artifacts; external providers are not implemented.
 
 ## Search And QA
 
@@ -161,6 +161,7 @@ The QA endpoint is deterministic and extractive. It returns an answer plus citat
 
 - `POST /documents/ingest/text`
 - `POST /documents/ingest/epub`
+- `POST /documents/ingest/pdf`
 - `GET /documents`
 - `GET /documents/{document_id}`
 - `GET /documents/{document_id}/records`
@@ -223,8 +224,9 @@ The default CORS origins are local-only. Uploaded file content and secrets are n
 ## Limitations
 
 - SQLite is the only configured persistence layer.
-- Text and EPUB are supported; real OCR and PDF OCR are not implemented.
-- Summary jobs are synchronous despite job/step bookkeeping.
+- Text, EPUB, and PDF are supported; real OCR is not implemented for scanned PDFs.
+- The backend summary request remains synchronous in both modes; the paragraph service schedules its internal batches asynchronously while the backend polls.
+- Paragraph-service jobs are in-memory, non-durable, and mock-provider-only.
 - The local summariser is deterministic and extractive, not an LLM summary.
 - The local vector-style retriever is not embeddings and should not be treated as semantic search.
 - Fusion is intentionally simple.

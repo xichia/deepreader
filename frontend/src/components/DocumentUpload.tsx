@@ -22,7 +22,7 @@ function DocumentUpload({ onUploadComplete }: DocumentUploadProps) {
   async function handleSubmit(event: FormEvent<HTMLFormElement>) {
     event.preventDefault();
     if (!selectedFile) {
-      setError("Choose a .txt or .epub file.");
+      setError("Choose a .txt, .epub, or .pdf file.");
       return;
     }
 
@@ -51,7 +51,7 @@ function DocumentUpload({ onUploadComplete }: DocumentUploadProps) {
         <input
           ref={inputRef}
           type="file"
-          accept=".txt,.epub"
+          accept=".txt,.epub,.pdf"
           onChange={handleFileChange}
           disabled={isUploading}
         />
