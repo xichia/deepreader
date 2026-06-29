@@ -36,19 +36,21 @@ class FakeRemoteSummaryClient:
         self.document_id = None
         self.submit_calls = 0
         self.artifact_calls = 0
+        self.job_id = "remote-job-1"
 
     def submit_job(self, document_id, records):
         self.submit_calls += 1
         self.document_id = document_id
         self.submitted_records = records
-        return "remote-job-1"
+        self.job_id = f"remote-job-{self.submit_calls}"
+        return self.job_id
 
     def get_job_status(self, job_id):
-        assert job_id == "remote-job-1"
+        assert job_id == self.job_id
         return {"status": self.status}
 
     def get_job_artifact(self, job_id):
-        assert job_id == "remote-job-1"
+        assert job_id == self.job_id
         self.artifact_calls += 1
         artifact = []
         for index, record in enumerate(self.submitted_records):
@@ -282,3 +284,110 @@ def test_remote_summary_runner_preserves_failed_artifact_state(db_session, monke
     assert len(summaries) == 1
     assert summaries[0].record_id == records[0].id
     assert "remote-job-1" in job.error_message
+
+
+def test_env_configured_remote_summary_polling_values(monkeypatch):
+    from deepreader.summarise.service import get_remote_max_polls, get_remote_poll_interval
+    monkeypatch.setenv("DEEPREADER_REMOTE_SUMMARY_MAX_POLLS", "150")
+    monkeypatch.setenv("DEEPREADER_REMOTE_SUMMARY_POLL_INTERVAL_SECONDS", "1.5")
+    assert get_remote_max_polls() == 150
+    assert get_remote_poll_interval() == 1.5
+
+
+def test_invalid_polling_env_values(monkeypatch):
+    from deepreader.summarise.service import get_remote_max_polls, get_remote_poll_interval
+    monkeypatch.setenv("DEEPREADER_REMOTE_SUMMARY_MAX_POLLS", "not_an_int")
+    monkeypatch.setenv("DEEPREADER_REMOTE_SUMMARY_POLL_INTERVAL_SECONDS", "not_a_float")
+    assert get_remote_max_polls() == 60
+    assert get_remote_poll_interval() == 2.0
+
+    monkeypatch.setenv("DEEPREADER_REMOTE_SUMMARY_MAX_POLLS", "-5")
+    monkeypatch.setenv("DEEPREADER_REMOTE_SUMMARY_POLL_INTERVAL_SECONDS", "-2.5")
+    assert get_remote_max_polls() == 60
+    assert get_remote_poll_interval() == 2.0
+
+
+def test_remote_summary_timeout_path_marks_job_failed(db_session, monkeypatch):
+    document, records = _create_document_with_records(db_session)
+    client = FakeRemoteSummaryClient(status="running")
+
+    monkeypatch.setenv("DEEPREADER_SUMMARY_BACKEND", "remote")
+    monkeypatch.setenv("DEEPREADER_ALLOW_REMOTE_SUMMARY_SERVICE", "true")
+    monkeypatch.setenv("DEEPREADER_REMOTE_SUMMARY_MAX_POLLS", "1")
+    monkeypatch.setenv("DEEPREADER_REMOTE_SUMMARY_POLL_INTERVAL_SECONDS", "0.001")
+    monkeypatch.setattr(remote_client_module, "RemoteSummaryClient", lambda: client)
+
+    job = SummaryJobRunner().run_for_document(db_session, document.id)
+    steps = list_job_steps(db_session, job.id)
+
+    assert job.status == "failed"
+    assert "did not finish before the polling timeout" in job.error_message
+    assert "remote-job-1" in job.error_message
+    assert all(step.status == "failed" for step in steps)
+
+
+def test_remote_summary_retry_reuses_completed_job(db_session, monkeypatch):
+    document, records = _create_document_with_records(db_session)
+    client_1 = FakeRemoteSummaryClient(status="running")
+    client_2 = FakeRemoteSummaryClient(status="completed")
+
+    monkeypatch.setenv("DEEPREADER_SUMMARY_BACKEND", "remote")
+    monkeypatch.setenv("DEEPREADER_ALLOW_REMOTE_SUMMARY_SERVICE", "true")
+    monkeypatch.setenv("DEEPREADER_REMOTE_SUMMARY_MAX_POLLS", "1")
+    monkeypatch.setenv("DEEPREADER_REMOTE_SUMMARY_POLL_INTERVAL_SECONDS", "0.001")
+
+    monkeypatch.setattr(remote_client_module, "RemoteSummaryClient", lambda: client_1)
+    runner = SummaryJobRunner()
+    job = runner.run_for_document(db_session, document.id)
+    assert job.status == "failed"
+
+    # client_2 needs to know what records client_1 submitted so it can return them in the artifact
+    client_2.submitted_records = client_1.submitted_records
+    client_2.document_id = client_1.document_id
+    monkeypatch.setattr(remote_client_module, "RemoteSummaryClient", lambda: client_2)
+    retried_job = runner.retry_failed_steps(db_session, job.id)
+
+    assert retried_job.status == "completed"
+    assert client_2.submit_calls == 0
+    assert client_2.artifact_calls == 1
+
+
+def test_remote_summary_retry_submits_new_job_if_reuse_fails(db_session, monkeypatch):
+    document, records = _create_document_with_records(db_session)
+    client_1 = FakeRemoteSummaryClient(status="running")
+
+    class BrokenStatusClient(FakeRemoteSummaryClient):
+        def get_job_status(self, job_id):
+            if job_id == "remote-job-1":
+                raise ValueError("Job not found in memory")
+            return {"status": "completed"}
+
+        def submit_job(self, document_id, records):
+            self.submit_calls += 1
+            self.document_id = document_id
+            self.submitted_records = records
+            self.job_id = "remote-job-2"
+            return self.job_id
+
+        def get_job_artifact(self, job_id):
+            assert job_id == "remote-job-2"
+            return super().get_job_artifact(job_id)
+
+    client_2 = BrokenStatusClient(status="completed")
+
+    monkeypatch.setenv("DEEPREADER_SUMMARY_BACKEND", "remote")
+    monkeypatch.setenv("DEEPREADER_ALLOW_REMOTE_SUMMARY_SERVICE", "true")
+    monkeypatch.setenv("DEEPREADER_REMOTE_SUMMARY_MAX_POLLS", "1")
+    monkeypatch.setenv("DEEPREADER_REMOTE_SUMMARY_POLL_INTERVAL_SECONDS", "0.001")
+
+    monkeypatch.setattr(remote_client_module, "RemoteSummaryClient", lambda: client_1)
+    runner = SummaryJobRunner()
+    job = runner.run_for_document(db_session, document.id)
+    assert job.status == "failed"
+
+    monkeypatch.setattr(remote_client_module, "RemoteSummaryClient", lambda: client_2)
+    retried_job = runner.retry_failed_steps(db_session, job.id)
+
+    assert retried_job.status == "completed"
+    assert client_2.submit_calls == 1
+    assert client_2.artifact_calls == 1

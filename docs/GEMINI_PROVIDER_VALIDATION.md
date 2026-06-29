@@ -45,6 +45,19 @@ GEMINI_API_KEY_LANE_01=replace_me
 
 ## Run locally
 
+### One-Command Dev Runner (Honcho / Foreman)
+
+You can run all three services concurrently using the provided `Procfile.gemini` and your preferred process manager (like `honcho`, `foreman`, or `overmind`). First, make sure you have created `.env.local` at the root, then run:
+
+```bash
+# Example using honcho (must be run from your active virtualenv containing honcho/foreman)
+honcho -e .env.local -f Procfile.gemini start
+```
+
+If shell/process managers are unavailable, fallback to the three-terminal setup below.
+
+### Three-Terminal Setup
+
 Terminal 1 — paragraph service:
 
 ```bash
@@ -144,6 +157,29 @@ GEMINI_API_KEY_LANE_10=...
 ```
 
 Observe batch count, lane assignment, completed/failed records, retries, and rate-limit behavior before changing budgets.
+
+## Running the full PDF test
+
+Follow this workflow to validate PDF extraction and remote summary generation end-to-end:
+
+1. **Start the services**: Either run the one-command Honcho runner or start the three separate terminals as detailed in the "Run locally" section.
+2. **Upload PDF**: Click the upload control in the dashboard library panel and upload `deepreader_gemini_smoke_test.pdf` (or any small synthetic PDF).
+3. **Expect 2 records**: Ensure the document records panel loads exactly 2 paragraph records parsed from the PDF.
+4. **Generate summaries**: Click the "Generate summaries" button.
+5. **Expected result**:
+   - The panel should display "2 records / 2 summaries" when complete.
+   - No importer errors should be logged in the console or shown on screen.
+   - The document records list should display the source text and the generated summary together side-by-side.
+   - Running QA queries (e.g. asking a question about the PDF text) should produce extractive citations referencing verbatim original source text, not the summary.
+6. **If the job times out**:
+   - Increase `DEEPREADER_REMOTE_SUMMARY_MAX_POLLS` in `.env.local` to allow more time (e.g. 180).
+   - Increase `SUMMARY_LANE_RPM` to speed up lane cooldowns (e.g. 5).
+   - Click "Retry failed" to resume the timed-out job. The backend will reuse the same remote job ID and query the summary service directly without resubmitting duplicate work.
+   - To debug or inspect the paragraph service job directly, run these diagnostic commands:
+     ```bash
+     curl -s http://127.0.0.1:8001/jobs/JOB_ID | python3 -m json.tool
+     curl -s http://127.0.0.1:8001/jobs/JOB_ID/artifact | python3 -m json.tool
+     ```
 
 ## Rate-limit recovery
 
