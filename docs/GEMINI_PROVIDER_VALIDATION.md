@@ -12,6 +12,8 @@ The v0.5 behavior remains the default. `SUMMARY_SERVICE_PROVIDER=mock` requires 
 
 The intended ten-lane experiment uses ten independent Gemini projects and quota pools. Ten keys created in one project must not be assumed to provide ten independent quotas. DeepReader does not discover quotas automatically; it only applies the configured per-lane cooldown and concurrency caps.
 
+`SUMMARY_LANE_RPM` is a per-lane/per-key limit. Effective total RPM is `SUMMARY_MAX_PARALLEL_LANES * SUMMARY_LANE_RPM`; with 10 parallel lanes and 4 RPM per lane, the configured maximum is 40 provider calls per minute across the service.
+
 When Gemini is selected, startup/request validation requires one non-empty key for every configured lane. Key values are retained only in runtime lane/provider objects and are excluded from API responses, artifacts, configuration summaries, and logs.
 
 ## Start with one lane
@@ -28,14 +30,14 @@ SUMMARY_SERVICE_ENABLE_PROVIDER_CALLS=true
 SUMMARY_SERVICE_MODEL=gemini-2.5-flash
 
 SUMMARY_LANE_COUNT=1
-SUMMARY_LANE_RPM=1
+SUMMARY_LANE_RPM=4
 SUMMARY_MAX_PARALLEL_LANES=1
 
-SUMMARY_BATCH_TARGET_TOKENS=1000
-SUMMARY_BATCH_HARD_MAX_TOKENS=3000
-SUMMARY_BATCH_RESERVED_OUTPUT_TOKENS=1000
+SUMMARY_BATCH_TARGET_TOKENS=50000
+SUMMARY_BATCH_HARD_MAX_TOKENS=75000
+SUMMARY_BATCH_RESERVED_OUTPUT_TOKENS=25000
 
-SUMMARY_MAX_PROVIDER_CALLS_PER_JOB=1
+SUMMARY_MAX_PROVIDER_CALLS_PER_JOB=1000
 
 GEMINI_API_KEY_LANE_01=replace_me
 ```
@@ -95,10 +97,12 @@ Open `http://127.0.0.1:5173`, upload a small non-sensitive PDF, inspect its extr
 1. Run one lane against the tiny synthetic smoke records.
 2. Keep one lane and summarize one tiny non-sensitive PDF.
 3. Configure two independent lanes and force two small batches.
-4. Configure ten independent lanes and use conservative small batches.
+4. Configure ten independent lanes and use the stability-oriented 50k batch target.
 5. Increase token budgets only after observing actual rate-limit behavior.
 
-Do not begin with 250k-token batches. The initial validation defaults are a 5,000-token batch target, a 10,000-token hard maximum, 2,000 reserved output tokens, and a 50,000 estimated-input-token job cap.
+The recommended batch target was reduced from 200k to 50k after a real run packed 347,169 estimated input tokens into only two large batches. Both provider batches failed after retries, and the resulting artifact exposed only `provider_exception` without actionable detail. The 50k target is a stability and diagnostic default, not a hard architectural limit.
+
+The recommended local values are a 50,000-token batch target, a 75,000-token hard maximum, 25,000 reserved output tokens, and 1,000 provider calls per job. `SUMMARY_MAX_INPUT_TOKENS_PER_JOB` remains disabled when unset, empty, or `0`; a positive integer can opt into a job-level cap.
 
 ### Stage A: synthetic smoke test
 
@@ -136,11 +140,11 @@ Use a slightly larger PDF or a smaller target so the packer creates two batches.
 ```env
 SUMMARY_LANE_COUNT=10
 SUMMARY_MAX_PARALLEL_LANES=10
-SUMMARY_LANE_RPM=1
-SUMMARY_MAX_PROVIDER_CALLS_PER_JOB=10
-SUMMARY_BATCH_TARGET_TOKENS=5000
-SUMMARY_BATCH_HARD_MAX_TOKENS=10000
-SUMMARY_BATCH_RESERVED_OUTPUT_TOKENS=2000
+SUMMARY_LANE_RPM=4
+SUMMARY_MAX_PROVIDER_CALLS_PER_JOB=1000
+SUMMARY_BATCH_TARGET_TOKENS=50000
+SUMMARY_BATCH_HARD_MAX_TOKENS=75000
+SUMMARY_BATCH_RESERVED_OUTPUT_TOKENS=25000
 
 GEMINI_API_KEY_LANE_01=...
 GEMINI_API_KEY_LANE_02=...
@@ -171,17 +175,19 @@ Follow this workflow to validate PDF extraction and remote summary generation en
    - Running QA queries (e.g. asking a question about the PDF text) should produce extractive citations referencing verbatim original source text, not the summary.
 6. **If the job times out**:
    - Increase `DEEPREADER_REMOTE_SUMMARY_MAX_POLLS` in `.env.local` to allow more time (e.g. 180).
-   - Increase `SUMMARY_LANE_RPM` to speed up lane cooldowns (e.g. 5).
+   - Confirm that the configured per-lane RPM and project quotas are compatible before changing cooldowns.
    - Click "Retry failed" to resume the timed-out job. The backend will reuse the same remote job ID and query the summary service directly without resubmitting duplicate work.
    - To debug or inspect the paragraph service job directly, run these diagnostic commands:
      ```bash
+     curl -s http://127.0.0.1:8001/jobs | python3 -m json.tool
      curl -s http://127.0.0.1:8001/jobs/JOB_ID | python3 -m json.tool
      curl -s http://127.0.0.1:8001/jobs/JOB_ID/artifact | python3 -m json.tool
+     curl -s http://127.0.0.1:8000/jobs | python3 -m json.tool
      ```
 
 ## Rate-limit recovery
 
-On a 429 or other provider exception, the dispatcher retries only within the configured call cap and writes failed artifact lines after exhaustion. Do not rapidly resubmit. Wait for the project quota window/cooldown, reduce parallel lanes or batch count if needed, then run Generate summaries again. The new backend job checkpoints already imported Gemini summaries with matching source hashes and resubmits only records that still need work.
+On a 429 or other provider exception, the dispatcher retries only within the configured call cap and writes sanitized failed artifact lines after exhaustion. Each line includes a stable error code plus provider/model, lane, attempt/retry, and available usage details without credentials or source text. Do not rapidly resubmit. Wait for the project quota window/cooldown, reduce parallel lanes or batch count if needed, then run Generate summaries again. The backend job checkpoints already imported Gemini summaries with matching source hashes and resubmits only records that still need work.
 
 ## Offline verification
 

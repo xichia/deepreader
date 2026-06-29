@@ -11,6 +11,7 @@ from sqlalchemy.orm import Session
 from deepreader.summarise.checkpoints import find_existing_summary_checkpoint
 from deepreader.summarise.local import LocalExtractiveSummariser
 from deepreader.summarise.summariser import SummaryInput, Summariser
+from deepreader.security import sanitize_diagnostic_text
 from deepreader.storage.models import DocumentRecord, Job, JobStep
 from deepreader.storage.repositories import (
     JOB_STATUS_COMPLETED,
@@ -26,6 +27,7 @@ from deepreader.storage.repositories import (
     list_job_steps,
     refresh_job_progress,
     set_job_status,
+    set_job_remote_progress,
     set_job_step_status,
 )
 
@@ -142,6 +144,7 @@ class SummaryJobRunner:
 
         remote_job_id: str | None = None
         submitted_stable_ids: set[str] = set()
+        status_data: dict = {}
         remote_summariser_name = os.getenv("SUMMARY_SERVICE_PROVIDER", "mock").strip().lower()
 
         try:
@@ -151,6 +154,13 @@ class SummaryJobRunner:
                     status_data = client.get_job_status(reuse_remote_job_id)
                     LOGGER.info("Successfully fetched status for remote job %s to reuse: %s", reuse_remote_job_id, status_data)
                     remote_job_id = reuse_remote_job_id
+                    set_job_remote_progress(
+                        session,
+                        job,
+                        remote_job_id=remote_job_id,
+                        status_data=status_data,
+                    )
+                    session.commit()
                 except Exception as exc:
                     LOGGER.warning("Could not reuse remote job %s: %s. Submitting a new job.", reuse_remote_job_id, exc)
 
@@ -189,6 +199,19 @@ class SummaryJobRunner:
                     return job
 
                 remote_job_id = client.submit_job(str(job.document_id), records_to_send)
+                set_job_remote_progress(
+                    session,
+                    job,
+                    remote_job_id=remote_job_id,
+                    status_data={
+                        "status": "submitted",
+                        "completed_records": 0,
+                        "failed_records": 0,
+                        "total_records": len(records_to_send),
+                        "stats": {},
+                    },
+                )
+                session.commit()
             else:
                 for record, step in zip(records, steps, strict=True):
                     set_job_step_status(session, step, JOB_STATUS_RUNNING, increment_attempt=True)
@@ -199,9 +222,15 @@ class SummaryJobRunner:
             remote_max_polls = get_remote_max_polls()
             remote_poll_interval = get_remote_poll_interval()
 
-            status_data: dict = {}
             for poll_number in range(remote_max_polls):
                 status_data = client.get_job_status(remote_job_id)
+                set_job_remote_progress(
+                    session,
+                    job,
+                    remote_job_id=remote_job_id,
+                    status_data=status_data,
+                )
+                session.commit()
                 if status_data.get("status") in {"completed", "failed"}:
                     break
                 if poll_number < remote_max_polls - 1:
@@ -210,7 +239,12 @@ class SummaryJobRunner:
                 raise TimeoutError(f"Remote summary job {remote_job_id} did not finish before the polling timeout.")
 
             artifact = client.get_job_artifact(remote_job_id)
-            import_stats = import_summary_artifact(session, job.document_id, artifact)
+            import_stats = import_summary_artifact(
+                session,
+                job.document_id,
+                artifact,
+                remote_job_id=remote_job_id,
+            )
             imported_ids = set(import_stats["imported_record_ids"])
             skipped_ids = set(import_stats["skipped_record_ids"])
             failed_ids = set(import_stats["failed_record_ids"])
@@ -223,11 +257,15 @@ class SummaryJobRunner:
                 if record.stable_id not in submitted_stable_ids:
                     continue
                 if record.stable_id in failed_ids:
+                    artifact_detail = import_stats["failed_details_by_record"].get(
+                        record.stable_id,
+                        "Remote summary artifact reported an invalid result",
+                    )
                     set_job_step_status(
                         session,
                         step,
                         JOB_STATUS_FAILED,
-                        error_message="Remote summary artifact reported or contained an invalid result.",
+                        error_message=f"Remote summary failed: {artifact_detail}",
                     )
                 elif record.stable_id in imported_ids or record.stable_id in skipped_ids:
                     set_job_step_status(session, step, JOB_STATUS_COMPLETED)
@@ -249,10 +287,12 @@ class SummaryJobRunner:
 
             refresh_job_progress(session, job)
             if job.failed_steps or remote_failed or import_stats["failed"]:
-                details = "; ".join(import_stats["errors"])
                 error_message = f"Remote summary job {remote_job_id} failed."
+                details = import_stats.get("failure_summary")
+                if not details and status_data.get("error"):
+                    details = sanitize_diagnostic_text(status_data["error"])
                 if details:
-                    error_message = f"{error_message} Import errors: {details}"
+                    error_message = f"{error_message} {details}"
                 set_job_status(session, job, JOB_STATUS_FAILED, error_message=error_message)
             else:
                 set_job_status(session, job, JOB_STATUS_COMPLETED)
@@ -266,7 +306,7 @@ class SummaryJobRunner:
             if persisted_job is None:  # pragma: no cover - defensive persistence guard
                 raise
             prefix = f"Remote summary job {remote_job_id} failed" if remote_job_id else "Remote summary submission failed"
-            error_message = f"{prefix}: {exc}"
+            error_message = f"{prefix}: {sanitize_diagnostic_text(exc)}"
             LOGGER.error("%s", error_message)
             for step in list_job_steps(session, persisted_job.id):
                 if step.status != JOB_STATUS_COMPLETED:
@@ -289,8 +329,8 @@ class SummaryJobRunner:
             return job
 
         import re
-        reuse_remote_job_id = None
-        if job.error_message:
+        reuse_remote_job_id = job.remote_job_id
+        if reuse_remote_job_id is None and job.error_message:
             match = re.search(r"Remote summary job ([a-zA-Z0-9\-_]+)", job.error_message)
             if match:
                 reuse_remote_job_id = match.group(1)

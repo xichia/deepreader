@@ -29,7 +29,7 @@ The backend summary endpoint is synchronous in both modes. Local summaries run i
 
 ## Related Services
 
-- `services/paragraph-summary-service`: Optional mock-only batch scheduling with quota lanes; its job registry is in-memory and non-durable.
+- `services/paragraph-summary-service`: Optional mock/Gemini batch scheduling with quota lanes; its inspectable job registry is in-memory and non-durable.
 
 ## Frontend Panels
 
@@ -44,13 +44,13 @@ The backend summary endpoint is synchronous in both modes. Local summaries run i
 ## Data Flow
 
 1. Upload `.txt`, `.epub`, or `.pdf`.
-2. Backend validates filename, extension, and size.
-3. Parser creates ordered records.
+2. Backend validates filename and extension; PDF bytes stream to a hashed temporary file without an application-level size cap.
+3. Parsers create ordered records; PDF parsing uses layout-preserving paragraph boundaries and skips empty or obvious table-of-contents pages.
 4. Repository stores document and records in SQLite.
 5. Stable IDs are derived deterministically from source hash and record position.
 6. Summary runner creates a job and one step per record.
 7. Existing matching summaries are treated as checkpoints.
-8. In opt-in remote mode, the backend submits only records without mock-provider checkpoints, polls the paragraph service, validates and imports one artifact, and maps each artifact result back to its job step.
+8. In opt-in remote mode, the backend submits only records without provider-specific checkpoints, persists the remote job ID and each polled progress snapshot, validates and imports one artifact, and maps compact, sanitized failure details back to its job steps.
 9. Search converts records and summaries into retrieval items.
 10. QA consumes retrieval results as evidence packets and returns extractive citations.
 

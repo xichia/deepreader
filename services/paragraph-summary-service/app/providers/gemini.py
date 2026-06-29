@@ -16,6 +16,14 @@ class StructuredOutputParseError(ValueError):
     """Raised when Gemini does not return the requested JSON structure."""
 
 
+class ResponseParseError(StructuredOutputParseError):
+    """Raised when Gemini does not return parseable JSON."""
+
+
+class SchemaValidationError(StructuredOutputParseError):
+    """Raised when Gemini JSON does not match the requested schema."""
+
+
 class GeminiSummaryItem(BaseModel):
     record_id: str
     source_hash: str
@@ -146,10 +154,13 @@ Rules:
             if not isinstance(response_text, str) or not response_text.strip():
                 raise ValueError("Gemini response did not contain JSON text")
             return GeminiSummaryPayload.model_validate_json(response_text)
-        except (ValidationError, ValueError, TypeError, json.JSONDecodeError) as exc:
-            raise StructuredOutputParseError(
-                "Gemini structured output could not be parsed"
-            ) from exc
+        except ValidationError as exc:
+            error_types = {str(error.get("type")) for error in exc.errors()}
+            if "json_invalid" in error_types:
+                raise ResponseParseError("Gemini response was not valid JSON") from exc
+            raise SchemaValidationError("Gemini response did not match the summary schema") from exc
+        except (ValueError, TypeError, json.JSONDecodeError) as exc:
+            raise ResponseParseError("Gemini response did not contain valid JSON") from exc
 
     @staticmethod
     def _usage_metadata(response: Any) -> dict[str, int]:

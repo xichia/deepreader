@@ -10,6 +10,7 @@ from sqlalchemy.orm import Session, selectinload
 
 from deepreader.records.ids import hash_bytes, hash_text, stable_record_id
 from deepreader.records.metadata import ParsedDocument, build_record_metadata
+from deepreader.security import redact_mapping, sanitize_diagnostic_text
 from deepreader.storage.models import (
     Answer,
     AnswerCitation,
@@ -184,6 +185,37 @@ def set_job_status(
         job.finished_at = utc_now()
     else:
         job.finished_at = None
+    session.add(job)
+    session.flush()
+    return job
+
+
+def set_job_remote_progress(
+    session: Session,
+    job: Job,
+    *,
+    remote_job_id: str | None = None,
+    status_data: dict[str, object] | None = None,
+) -> Job:
+    """Persist compact remote status fields for backend job inspection."""
+
+    if remote_job_id is not None:
+        job.remote_job_id = remote_job_id
+    if status_data is not None:
+        remote_stats = status_data.get("stats")
+        job.remote_progress_json = {
+            "remote_status": status_data.get("status"),
+            "remote_completed_records": status_data.get("completed_records"),
+            "remote_failed_records": status_data.get("failed_records"),
+            "remote_total_records": status_data.get("total_records"),
+            "remote_stats": redact_mapping(remote_stats) if isinstance(remote_stats, dict) else {},
+            "remote_error": (
+                sanitize_diagnostic_text(status_data["error"])
+                if isinstance(status_data.get("error"), str)
+                else None
+            ),
+        }
+    job.updated_at = utc_now()
     session.add(job)
     session.flush()
     return job

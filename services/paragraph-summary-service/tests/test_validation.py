@@ -1,7 +1,14 @@
 import pytest
 import app.scheduler.dispatcher as dispatcher_module
-from app.scheduler.dispatcher import _process_batch, _run_job_background, JobState
+from app.providers.gemini import ResponseParseError, SchemaValidationError
+from app.scheduler.dispatcher import (
+    JobState,
+    _process_batch,
+    _provider_error_code,
+    _run_job_background,
+)
 from app.records.schema import InputRecord, SummaryArtifactLine, SummaryRequest
+from app.scheduler.lane import QuotaLane
 
 class MockFaultyProvider:
     def __init__(self, fault_type):
@@ -67,6 +74,56 @@ async def test_validation_exception():
     assert job.stats["failed_batches"] == 1
     assert len(job.artifact_lines) == 1
     assert job.artifact_lines[0].status == "failed"
+    assert job.artifact_lines[0].error_code == "provider_exception"
+    assert job.artifact_lines[0].message == "ValueError: Provider error"
+
+
+@pytest.mark.asyncio
+async def test_provider_exception_artifact_preserves_sanitized_diagnostics():
+    secret = "test-secret-lane-key"
+    source_marker = "FULL_SOURCE_TEXT_MUST_NOT_LEAK"
+
+    class RaisingProvider:
+        async def summarize_batch(self, document_id, batch, summary_style):
+            error = RuntimeError(
+                f"429 rate limit exceeded; api_key={secret}; contents: {source_marker}"
+            )
+            error.usage = {"prompt_tokens": 42, "total_tokens": 42}
+            raise error
+
+    lane = QuotaLane("lane_03", rpm=6000, api_key=secret)
+    job = JobState("job-diagnostic", "doc1", 1)
+    batch = [InputRecord(record_id="r1", stable_id="stable-r1", text=source_marker, source_hash="h1")]
+
+    await _process_batch(job, batch, RaisingProvider(), "one_sentence", lane=lane)
+
+    line = job.artifact_lines[0]
+    assert line.status == "failed"
+    assert line.record_id == "r1"
+    assert line.stable_id == "stable-r1"
+    assert line.error_code == "provider_rate_limited"
+    assert "rate limit" in (line.message or "")
+    assert secret not in (line.message or "")
+    assert source_marker not in (line.message or "")
+    assert line.lane_id == "lane_03"
+    assert line.attempt_count == 3
+    assert line.retry_count == 2
+    assert line.usage == {"prompt_tokens": 42, "total_tokens": 42}
+
+
+@pytest.mark.parametrize(
+    ("exception", "expected_code"),
+    [
+        (TimeoutError("provider timed out"), "provider_timeout"),
+        (RuntimeError("429 rate limit exceeded"), "provider_rate_limited"),
+        (RuntimeError("401 invalid API key"), "provider_auth_error"),
+        (RuntimeError("requested model was not found"), "provider_model_not_found"),
+        (ResponseParseError("invalid JSON"), "response_parse_failed"),
+        (SchemaValidationError("invalid schema"), "schema_validation_failed"),
+    ],
+)
+def test_provider_exception_codes_are_stable(exception, expected_code):
+    assert _provider_error_code(exception) == expected_code
 
 @pytest.mark.asyncio
 async def test_validation_missing():
@@ -158,4 +215,4 @@ async def test_scheduler_surfaces_unexpected_worker_failure(monkeypatch):
     assert len(job.artifact_lines) == 1
     assert job.artifact_lines[0].record_id == "r1"
     assert job.artifact_lines[0].status == "failed"
-    assert job.artifact_lines[0].error_code == "provider_exception"
+    assert job.artifact_lines[0].error_code == "schema_validation_failed"

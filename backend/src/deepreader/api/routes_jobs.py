@@ -38,6 +38,13 @@ class JobOut(BaseModel):
     completed_steps: int
     failed_steps: int
     error_message: str | None
+    remote_job_id: str | None
+    remote_status: str | None
+    remote_completed_records: int | None
+    remote_failed_records: int | None
+    remote_total_records: int | None
+    remote_stats: dict
+    remote_error: str | None
     created_at: str
     updated_at: str
     finished_at: str | None
@@ -63,6 +70,7 @@ def job_step_out(step: JobStep, *, target_stable_id: str | None = None) -> JobSt
 
 def job_out(job: Job, *, include_steps: bool = True) -> JobOut:
     stable_ids = _target_stable_ids(job)
+    remote_progress = job.remote_progress_json or {}
     return JobOut(
         id=job.id,
         document_id=job.document_id,
@@ -72,6 +80,17 @@ def job_out(job: Job, *, include_steps: bool = True) -> JobOut:
         completed_steps=job.completed_steps,
         failed_steps=job.failed_steps,
         error_message=job.error_message,
+        remote_job_id=job.remote_job_id,
+        remote_status=remote_progress.get("remote_status"),
+        remote_completed_records=remote_progress.get("remote_completed_records"),
+        remote_failed_records=remote_progress.get("remote_failed_records"),
+        remote_total_records=remote_progress.get("remote_total_records"),
+        remote_stats=(
+            remote_progress.get("remote_stats")
+            if isinstance(remote_progress.get("remote_stats"), dict)
+            else {}
+        ),
+        remote_error=remote_progress.get("remote_error"),
         created_at=job.created_at.isoformat(),
         updated_at=job.updated_at.isoformat(),
         finished_at=job.finished_at.isoformat() if job.finished_at else None,

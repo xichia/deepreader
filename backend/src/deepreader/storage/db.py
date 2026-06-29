@@ -5,7 +5,7 @@ from __future__ import annotations
 import os
 from pathlib import Path
 
-from sqlalchemy import create_engine
+from sqlalchemy import create_engine, inspect, text
 from sqlalchemy.engine import Engine
 from sqlalchemy.engine.url import make_url
 from sqlalchemy.orm import Session, sessionmaker
@@ -32,6 +32,27 @@ def build_session_factory(engine: Engine) -> sessionmaker[Session]:
 
 def init_db(engine: Engine) -> None:
     Base.metadata.create_all(bind=engine)
+    _ensure_sqlite_job_observability_columns(engine)
+
+
+def _ensure_sqlite_job_observability_columns(engine: Engine) -> None:
+    """Add v0.6 remote-job fields to existing local SQLite databases."""
+
+    if engine.dialect.name != "sqlite" or not inspect(engine).has_table("jobs"):
+        return
+
+    column_names = {column["name"] for column in inspect(engine).get_columns("jobs")}
+    statements: list[str] = []
+    if "remote_job_id" not in column_names:
+        statements.append("ALTER TABLE jobs ADD COLUMN remote_job_id VARCHAR(255)")
+    if "remote_progress_json" not in column_names:
+        statements.append("ALTER TABLE jobs ADD COLUMN remote_progress_json JSON")
+    if not statements:
+        return
+
+    with engine.begin() as connection:
+        for statement in statements:
+            connection.execute(text(statement))
 
 
 def _ensure_sqlite_parent_directory(database_url: str) -> None:

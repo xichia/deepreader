@@ -28,6 +28,22 @@ class JobStatusResponse(BaseModel):
     total_records: int
     stats: dict[str, Any]
     error: str | None
+    created_at: str
+    updated_at: str
+
+
+def job_status_response(job: JobState) -> JobStatusResponse:
+    return JobStatusResponse(
+        job_id=job.job_id,
+        status=job.status,
+        completed_records=job.completed_records,
+        failed_records=job.failed_records,
+        total_records=job.total_records,
+        stats=job.stats,
+        error=job.error,
+        created_at=job.created_at,
+        updated_at=job.updated_at,
+    )
 
 @router.post("/paragraph-summaries", response_model=JobResponse, status_code=status.HTTP_202_ACCEPTED)
 async def submit_summary_job(request: SummaryRequest, background_tasks: BackgroundTasks):
@@ -53,15 +69,14 @@ def read_job_status(job_id: str):
     job = get_job(job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
-    return JobStatusResponse(
-        job_id=job.job_id,
-        status=job.status,
-        completed_records=job.completed_records,
-        failed_records=job.failed_records,
-        total_records=job.total_records,
-        stats=job.stats,
-        error=job.error,
-    )
+    return job_status_response(job)
+
+
+@router.get("/jobs", response_model=list[JobStatusResponse])
+def list_job_statuses():
+    """List compact in-memory job summaries without request records or artifacts."""
+
+    return [job_status_response(job) for job in reversed(JOBS.values())]
 
 @router.get("/jobs/{job_id}/artifact")
 def read_job_artifact(job_id: str):

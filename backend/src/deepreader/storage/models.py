@@ -96,6 +96,8 @@ class Job(Base):
     completed_steps: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     failed_steps: Mapped[int] = mapped_column(Integer, nullable=False, default=0)
     error_message: Mapped[str | None] = mapped_column(Text, nullable=True)
+    remote_job_id: Mapped[str | None] = mapped_column(String(255), nullable=True)
+    remote_progress_json: Mapped[dict[str, Any] | None] = mapped_column(JSON, nullable=True)
     created_at: Mapped[datetime] = mapped_column(DateTime(timezone=True), default=utc_now, nullable=False)
     updated_at: Mapped[datetime] = mapped_column(
         DateTime(timezone=True),

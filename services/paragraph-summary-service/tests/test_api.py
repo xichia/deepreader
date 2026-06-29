@@ -1,5 +1,6 @@
 from fastapi.testclient import TestClient
 from app.main import app
+from app.scheduler.dispatcher import JOBS
 import time
 
 client = TestClient(app)
@@ -57,3 +58,31 @@ def test_submit_rejects_duplicate_record_ids():
 
     assert response.status_code == 400
     assert response.json()["detail"] == "Duplicate record_id values are not allowed"
+
+
+def test_list_jobs_returns_compact_observable_statuses():
+    JOBS.clear()
+    response = client.post(
+        "/paragraph-summaries",
+        json={
+            "document_id": "list-test-doc",
+            "records": [
+                {"record_id": "r-list", "text": "A compact record.", "source_hash": "hash-list"}
+            ],
+        },
+    )
+    assert response.status_code == 202
+
+    list_response = client.get("/jobs")
+
+    assert list_response.status_code == 200
+    jobs = list_response.json()
+    assert len(jobs) == 1
+    assert jobs[0]["job_id"] == response.json()["job_id"]
+    assert jobs[0]["status"] == "completed"
+    assert jobs[0]["total_records"] == 1
+    assert jobs[0]["stats"]["provider"] == "mock"
+    assert jobs[0]["created_at"]
+    assert jobs[0]["updated_at"]
+    assert "artifact_lines" not in jobs[0]
+    assert "records" not in jobs[0]

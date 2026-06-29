@@ -34,23 +34,23 @@ class Settings(BaseModel):
         default_factory=lambda: int(os.getenv("SUMMARY_LANE_COUNT", "10"))
     )
     summary_lane_rpm: int = Field(
-        default_factory=lambda: int(os.getenv("SUMMARY_LANE_RPM", "1"))
+        default_factory=lambda: int(os.getenv("SUMMARY_LANE_RPM", "4"))
     )
     summary_max_parallel_lanes: int = Field(
         default_factory=lambda: int(os.getenv("SUMMARY_MAX_PARALLEL_LANES", "10"))
     )
 
     summary_batch_target_tokens: int = Field(
-        default_factory=lambda: int(os.getenv("SUMMARY_BATCH_TARGET_TOKENS", "5000"))
+        default_factory=lambda: int(os.getenv("SUMMARY_BATCH_TARGET_TOKENS", "50000"))
     )
     summary_batch_hard_max_tokens: int = Field(
-        default_factory=lambda: int(os.getenv("SUMMARY_BATCH_HARD_MAX_TOKENS", "10000"))
+        default_factory=lambda: int(os.getenv("SUMMARY_BATCH_HARD_MAX_TOKENS", "75000"))
     )
     summary_batch_reserved_output_tokens: int = Field(
-        default_factory=lambda: int(os.getenv("SUMMARY_BATCH_RESERVED_OUTPUT_TOKENS", "2000"))
+        default_factory=lambda: int(os.getenv("SUMMARY_BATCH_RESERVED_OUTPUT_TOKENS", "25000"))
     )
     summary_max_provider_calls_per_job: int = Field(
-        default_factory=lambda: int(os.getenv("SUMMARY_MAX_PROVIDER_CALLS_PER_JOB", "10"))
+        default_factory=lambda: int(os.getenv("SUMMARY_MAX_PROVIDER_CALLS_PER_JOB", "1000"))
     )
     summary_max_input_tokens_per_job: int = Field(
         default_factory=lambda: int(os.getenv("SUMMARY_MAX_INPUT_TOKENS_PER_JOB") or "0")

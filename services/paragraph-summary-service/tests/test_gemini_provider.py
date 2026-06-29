@@ -201,6 +201,31 @@ def test_mock_provider_still_default(monkeypatch):
     assert fresh_settings.summary_service_enable_provider_calls is False
 
 
+def test_provider_safe_local_defaults(monkeypatch):
+    for name in (
+        "SUMMARY_LANE_COUNT",
+        "SUMMARY_LANE_RPM",
+        "SUMMARY_MAX_PARALLEL_LANES",
+        "SUMMARY_BATCH_TARGET_TOKENS",
+        "SUMMARY_BATCH_HARD_MAX_TOKENS",
+        "SUMMARY_BATCH_RESERVED_OUTPUT_TOKENS",
+        "SUMMARY_MAX_PROVIDER_CALLS_PER_JOB",
+        "SUMMARY_MAX_INPUT_TOKENS_PER_JOB",
+    ):
+        monkeypatch.delenv(name, raising=False)
+
+    fresh_settings = Settings()
+
+    assert fresh_settings.summary_lane_count == 10
+    assert fresh_settings.summary_lane_rpm == 4
+    assert fresh_settings.summary_max_parallel_lanes == 10
+    assert fresh_settings.summary_batch_target_tokens == 50_000
+    assert fresh_settings.summary_batch_hard_max_tokens == 75_000
+    assert fresh_settings.summary_batch_reserved_output_tokens == 25_000
+    assert fresh_settings.summary_max_provider_calls_per_job == 1_000
+    assert fresh_settings.summary_max_input_tokens_per_job == 0
+
+
 @pytest.mark.asyncio
 async def test_mock_service_api_still_passes(monkeypatch):
     monkeypatch.setattr(settings, "summary_service_provider", "mock")

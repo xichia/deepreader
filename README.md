@@ -131,11 +131,13 @@ Dashboard uploads use the real API:
 - `POST /documents/ingest/epub` for `.epub`
 - `POST /documents/ingest/pdf` for `.pdf`
 
-The backend enforces local filename safety checks, extension allowlists, and upload size limits. Duplicate ingest currently creates another document row, while deterministic record stable IDs are reused for identical content. That behavior is intentional for now and tested.
+The backend enforces local filename safety checks and extension allowlists. PDF uploads stream to a temporary file while hashing and do not have an application-level size cap. Duplicate ingest currently creates another document row, while deterministic record stable IDs are reused for identical content. That behavior is intentional for now and tested.
 
 ## Jobs, Summaries, And Checkpointing
 
 Generating summaries for a document creates a `record_summary` job and one `summarise_record` step per record. The backend endpoint is synchronous: local extraction runs inline, while the opt-in remote path submits work to `paragraph-summary-service`, polls it to completion, imports the artifact once, and then returns the persisted job.
+
+Remote backend jobs persist the paragraph-service job ID and the latest remote record counts, status, and compact stats. The paragraph service exposes read-only `GET /jobs`, `GET /jobs/{job_id}`, and `GET /jobs/{job_id}/artifact` diagnostics; none includes source records or credentials.
 
 Checkpointing is based on `record_id`, `summariser_name`, and `source_hash`. Rerunning summary generation skips unchanged records that already have a matching summary. If a record source hash changes, a new current summary is created and prior source text remains untouched.
 

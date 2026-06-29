@@ -1,6 +1,7 @@
 import deepreader.summarise.artifact_importer as artifact_importer_module
 import deepreader.summarise.remote_client as remote_client_module
 from deepreader.storage.repositories import list_document_summaries, list_job_steps
+from deepreader.api.routes_jobs import job_out
 from deepreader.summarise.artifact_importer import import_summary_artifact
 from deepreader.summarise.service import SummaryJobRunner
 from deepreader.storage.models import Document, DocumentRecord, RecordSummary
@@ -47,7 +48,16 @@ class FakeRemoteSummaryClient:
 
     def get_job_status(self, job_id):
         assert job_id == self.job_id
-        return {"status": self.status}
+        failed_records = 1 if self.status == "failed" and self.fail_last else 0
+        completed_records = len(self.submitted_records) - failed_records
+        return {
+            "status": self.status,
+            "completed_records": completed_records,
+            "failed_records": failed_records,
+            "total_records": len(self.submitted_records),
+            "stats": {"provider": self.provider, "completed_batches": int(not failed_records)},
+            "error": "Provider quota exhausted" if failed_records else None,
+        }
 
     def get_job_artifact(self, job_id):
         assert job_id == self.job_id
@@ -67,7 +77,9 @@ class FakeRemoteSummaryClient:
                     "model": "gemini-2.5-flash" if self.provider == "gemini" else "mock-deterministic-v1",
                     "template_version": "v1",
                     "status": "failed" if failed else "completed",
-                    "error_code": "provider_error" if failed else None,
+                    "error_code": "provider_rate_limited" if failed else None,
+                    "message": "Gemini quota exhausted after retries" if failed else None,
+                    "usage": {},
                 }
             )
         return artifact
@@ -211,6 +223,53 @@ def test_import_artifact_rejects_duplicate_record_ids(db_session):
     assert db_session.query(RecordSummary).filter_by(record_id=records[0].id).count() == 1
 
 
+def test_import_artifact_compacts_failed_provider_diagnostics(db_session):
+    document, records = _create_document_with_records(db_session, count=8)
+    artifact = [
+        {
+            "document_id": str(document.id),
+            "record_id": record.stable_id,
+            "stable_id": record.stable_id,
+            "source_hash": record.source_hash,
+            "summary_text": "",
+            "status": "failed",
+            "error_code": "provider_rate_limited" if index < 6 else "provider_timeout",
+            "message": (
+                "api_key=must-not-leak; contents: FULL_SOURCE_MUST_NOT_LEAK"
+                if index == 0
+                else f"Sanitized provider failure {index}"
+            ),
+            "provider": "gemini",
+            "model": "gemini-3.1-flash-lite",
+        }
+        for index, record in enumerate(records)
+    ]
+
+    imported = import_summary_artifact(
+        db_session,
+        document.id,
+        artifact,
+        remote_job_id="remote-diagnostic-job",
+    )
+
+    assert imported["failed"] == 8
+    assert imported["error_code_counts"] == {
+        "provider_rate_limited": 6,
+        "provider_timeout": 2,
+    }
+    assert len(imported["failed_examples"]) == 5
+    assert len(imported["errors"]) == 1
+    assert "remote-diagnostic-job" in imported["failure_summary"]
+    assert "8 failed artifact line(s)" in imported["failure_summary"]
+    assert "provider_rate_limited=6" in imported["failure_summary"]
+    assert '"stable_id"' in imported["failure_summary"]
+    assert '"provider": "gemini"' in imported["failure_summary"]
+    assert '"model": "gemini-3.1-flash-lite"' in imported["failure_summary"]
+    assert "must-not-leak" not in imported["failure_summary"]
+    assert "FULL_SOURCE_MUST_NOT_LEAK" not in imported["failure_summary"]
+    assert "Artifact line for record" not in imported["failure_summary"]
+
+
 def test_remote_summary_runner_imports_once_and_uses_checkpoints(db_session, monkeypatch):
     document, records = _create_document_with_records(db_session)
     client = FakeRemoteSummaryClient()
@@ -284,6 +343,20 @@ def test_remote_summary_runner_preserves_failed_artifact_state(db_session, monke
     assert len(summaries) == 1
     assert summaries[0].record_id == records[0].id
     assert "remote-job-1" in job.error_message
+    assert "provider_rate_limited=1" in job.error_message
+    assert job.remote_job_id == "remote-job-1"
+    assert job.remote_progress_json["remote_status"] == "failed"
+    assert job.remote_progress_json["remote_completed_records"] == 1
+    assert job.remote_progress_json["remote_failed_records"] == 1
+    failed_step = next(step for step in steps if step.status == "failed")
+    assert "provider_rate_limited" in failed_step.error_message
+    assert "Gemini quota exhausted after retries" in failed_step.error_message
+
+    payload = job_out(job)
+    assert payload.remote_job_id == "remote-job-1"
+    assert payload.remote_status == "failed"
+    assert payload.remote_total_records == 2
+    assert payload.remote_stats["provider"] == "mock"
 
 
 def test_env_configured_remote_summary_polling_values(monkeypatch):

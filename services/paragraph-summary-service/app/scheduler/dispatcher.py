@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from collections import Counter
+from dataclasses import dataclass, field
 from datetime import datetime, timezone
 import logging
 import os
@@ -11,7 +12,11 @@ import re
 from typing import Any
 
 from app.config import settings
-from app.providers.gemini import GeminiProvider, StructuredOutputParseError
+from app.providers.gemini import (
+    GeminiProvider,
+    ResponseParseError,
+    SchemaValidationError,
+)
 from app.providers.mock import MockProvider
 from app.records.schema import InputRecord, SummaryArtifactLine, SummaryRequest
 from app.scheduler.lane import QuotaLane
@@ -21,6 +26,12 @@ LOGGER = logging.getLogger(__name__)
 
 GEMINI_PROMPT_OVERHEAD_TOKENS = 256
 MAX_RETRIES = 2
+MAX_DIAGNOSTIC_CHARS = 500
+_SECRET_ASSIGNMENT_RE = re.compile(
+    r"(?i)\b(api[_-]?key|authorization|credential|password|secret|token|x-goog-api-key)"
+    r"\s*[:=]\s*(?:bearer\s+)?[^\s,;]+"
+)
+_GOOGLE_API_KEY_RE = re.compile(r"AIza[0-9A-Za-z_-]{16,}")
 
 # In-memory storage for the local validation service.
 JOBS: dict[str, "JobState"] = {}
@@ -28,6 +39,117 @@ JOBS: dict[str, "JobState"] = {}
 
 class ProviderConfigurationError(ValueError):
     """Raised when an explicitly selected provider is not safe to run."""
+
+
+@dataclass(frozen=True)
+class FailureDetail:
+    error_code: str
+    message: str
+    lane_id: str | None = None
+    attempt_count: int | None = None
+    retry_count: int | None = None
+    usage: dict[str, Any] = field(default_factory=dict)
+
+
+def _sanitize_diagnostic_text(value: object, *, secret_values: tuple[str, ...] = ()) -> str:
+    """Return compact provider diagnostics without credentials or request bodies."""
+
+    text = re.sub(r"\s+", " ", str(value)).strip()
+    for secret in secret_values:
+        if secret:
+            text = text.replace(secret, "[redacted]")
+    text = _GOOGLE_API_KEY_RE.sub("[redacted]", text)
+    text = _SECRET_ASSIGNMENT_RE.sub(lambda match: f"{match.group(1)}=[redacted]", text)
+    text = re.sub(
+        r"(?i)\b(input records|prompt|request body|contents)\s*[:=].*$",
+        lambda match: f"{match.group(1)}=[omitted]",
+        text,
+    )
+    if not text:
+        return "Provider request failed without an error message"
+    if len(text) > MAX_DIAGNOSTIC_CHARS:
+        return f"{text[: MAX_DIAGNOSTIC_CHARS - 3]}..."
+    return text
+
+
+def _provider_error_code(exc: Exception) -> str:
+    if isinstance(exc, ResponseParseError):
+        return "response_parse_failed"
+    if isinstance(exc, SchemaValidationError):
+        return "schema_validation_failed"
+    if isinstance(exc, TimeoutError) or "timeout" in type(exc).__name__.lower():
+        return "provider_timeout"
+
+    status_code = getattr(exc, "status_code", None)
+    if status_code is None:
+        status_code = getattr(getattr(exc, "response", None), "status_code", None)
+    if status_code is None:
+        status_code = getattr(exc, "code", None)
+    error_text = f"{type(exc).__name__} {exc}".lower()
+    if status_code == 429 or any(
+        term in error_text
+        for term in ("rate limit", "resourceexhausted", "resource_exhausted", "quota")
+    ):
+        return "provider_rate_limited"
+    if status_code in {401, 403} or any(
+        term in error_text
+        for term in (
+            "unauthenticated",
+            "permissiondenied",
+            "permission_denied",
+            "invalid api key",
+            "api key not valid",
+        )
+    ):
+        return "provider_auth_error"
+    if status_code == 404 or ("model" in error_text and "not found" in error_text):
+        return "provider_model_not_found"
+    return "provider_exception"
+
+
+def _exception_usage(exc: Exception) -> dict[str, int]:
+    usage_source = getattr(exc, "usage", None) or getattr(exc, "usage_metadata", None)
+    if usage_source is None:
+        return {}
+
+    field_names = {
+        "prompt_tokens": ("prompt_tokens", "prompt_token_count"),
+        "completion_tokens": ("completion_tokens", "candidates_token_count"),
+        "total_tokens": ("total_tokens", "total_token_count"),
+    }
+    usage: dict[str, int] = {}
+    for output_name, candidates in field_names.items():
+        for candidate in candidates:
+            value = (
+                usage_source.get(candidate)
+                if isinstance(usage_source, dict)
+                else getattr(usage_source, candidate, None)
+            )
+            if isinstance(value, int):
+                usage[output_name] = value
+                break
+    return usage
+
+
+def _exception_failure(
+    exc: Exception,
+    *,
+    lane: QuotaLane | None,
+    attempt_count: int,
+) -> FailureDetail:
+    secret_values = (lane.api_key,) if lane is not None and lane.api_key else ()
+    message = _sanitize_diagnostic_text(
+        f"{type(exc).__name__}: {exc}",
+        secret_values=secret_values,
+    )
+    return FailureDetail(
+        error_code=_provider_error_code(exc),
+        message=message,
+        lane_id=lane.lane_id if lane is not None else None,
+        attempt_count=attempt_count,
+        retry_count=max(attempt_count - 1, 0),
+        usage=_exception_usage(exc),
+    )
 
 
 class JobState:
@@ -40,6 +162,7 @@ class JobState:
         self.status = "pending"
         self.artifact_lines: list[SummaryArtifactLine] = []
         self.created_at = datetime.now(timezone.utc).isoformat()
+        self.updated_at = self.created_at
         self.error: str | None = None
         self.stats: dict[str, Any] = {
             "total_batches": 0,
@@ -55,12 +178,16 @@ class JobState:
         }
         self._provider_call_lock = asyncio.Lock()
 
+    def touch(self) -> None:
+        self.updated_at = datetime.now(timezone.utc).isoformat()
+
     async def claim_provider_call(self, maximum: int | None) -> bool:
         async with self._provider_call_lock:
             attempted = int(self.stats["provider_calls_attempted"])
             if maximum is not None and attempted >= maximum:
                 return False
             self.stats["provider_calls_attempted"] = attempted + 1
+            self.touch()
             return True
 
 
@@ -172,13 +299,26 @@ def _validate_results(
     job: JobState,
     current_batch: list[InputRecord],
     results: Any,
-) -> tuple[list[SummaryArtifactLine], list[InputRecord], dict[str, str]]:
+    *,
+    lane: QuotaLane | None = None,
+    attempt_count: int | None = None,
+) -> tuple[list[SummaryArtifactLine], list[InputRecord], dict[str, FailureDetail]]:
     expected_records = {record.record_id: record for record in current_batch}
     expected_ids = set(expected_records)
-    errors: dict[str, str] = {}
+    errors: dict[str, FailureDetail] = {}
+
+    def failure(error_code: str, message: str) -> FailureDetail:
+        return FailureDetail(
+            error_code=error_code,
+            message=message,
+            lane_id=lane.lane_id if lane is not None else None,
+            attempt_count=attempt_count,
+            retry_count=max((attempt_count or 1) - 1, 0),
+        )
 
     if not isinstance(results, list) or any(not isinstance(item, SummaryArtifactLine) for item in results):
-        return [], current_batch, {record.record_id: "provider_exception" for record in current_batch}
+        detail = failure("schema_validation_failed", "Provider returned an invalid result collection")
+        return [], current_batch, {record.record_id: detail for record in current_batch}
 
     result_ids = [result.record_id for result in results]
     unknown_ids = set(result_ids) - expected_ids
@@ -188,7 +328,8 @@ def _validate_results(
             LOGGER.warning("Provider returned %s unknown record IDs for job %s", len(unknown_ids), job.job_id)
         if wrong_documents:
             LOGGER.warning("Provider returned a wrong document ID for job %s", job.job_id)
-        return [], current_batch, {record.record_id: "unknown_record_id" for record in current_batch}
+        detail = failure("unknown_record_id", "Provider returned unknown record or document identifiers")
+        return [], current_batch, {record.record_id: detail for record in current_batch}
 
     counts = Counter(result_ids)
     valid_results: list[SummaryArtifactLine] = []
@@ -197,33 +338,45 @@ def _validate_results(
 
     for record_id, record in expected_records.items():
         if counts[record_id] == 0:
-            errors[record_id] = "missing_record"
+            errors[record_id] = failure("missing_record", "Provider response omitted this record")
             retry_records.append(record)
             continue
         if counts[record_id] > 1:
-            errors[record_id] = "duplicate_record_id"
+            errors[record_id] = failure("duplicate_record_id", "Provider returned this record more than once")
             retry_records.append(record)
             continue
 
         result = results_by_id[record_id]
         if result.source_hash != record.source_hash:
-            errors[record_id] = "source_hash_mismatch"
+            errors[record_id] = failure("source_hash_mismatch", "Provider returned a mismatched source hash")
             retry_records.append(record)
             continue
         if result.stable_id != record.stable_id:
-            errors[record_id] = "unknown_record_id"
+            errors[record_id] = failure("unknown_record_id", "Provider returned a mismatched stable ID")
             retry_records.append(record)
             continue
         if result.status not in {"completed", "skipped", "failed"}:
-            errors[record_id] = "invalid_status"
+            errors[record_id] = failure("schema_validation_failed", "Provider returned an invalid result status")
             retry_records.append(record)
             continue
         if result.status == "failed":
-            errors[record_id] = result.error_code or "provider_exception"
+            result_message = result.message or result.error or "Provider returned a failed result"
+            errors[record_id] = FailureDetail(
+                error_code=result.error_code or "provider_exception",
+                message=_sanitize_diagnostic_text(result_message),
+                lane_id=result.lane_id or (lane.lane_id if lane is not None else None),
+                attempt_count=result.attempt_count or attempt_count,
+                retry_count=(
+                    result.retry_count
+                    if result.retry_count is not None
+                    else max((attempt_count or 1) - 1, 0)
+                ),
+                usage=result.usage,
+            )
             retry_records.append(record)
             continue
         if result.status == "completed" and not result.summary_text.strip():
-            errors[record_id] = "empty_summary"
+            errors[record_id] = failure("schema_validation_failed", "Provider returned an empty summary")
             retry_records.append(record)
             continue
         if (
@@ -231,7 +384,10 @@ def _validate_results(
             and result.provider == "gemini"
             and not _is_reasonable_one_sentence(result.summary_text)
         ):
-            errors[record_id] = "empty_summary"
+            errors[record_id] = failure(
+                "schema_validation_failed",
+                "Provider summary did not satisfy the one-sentence schema",
+            )
             retry_records.append(record)
             continue
         valid_results.append(result)
@@ -248,15 +404,20 @@ async def _process_batch(
     lane: QuotaLane | None = None,
 ) -> None:
     current_batch = batch
-    last_errors: dict[str, str] = {}
+    last_failures: dict[str, FailureDetail] = {}
 
     for attempt in range(MAX_RETRIES + 1):
         if not current_batch:
             break
         if not await job.claim_provider_call(max_provider_calls):
-            last_errors.update(
-                {record.record_id: "max_provider_calls_exceeded" for record in current_batch}
+            detail = FailureDetail(
+                error_code="max_provider_calls_exceeded",
+                message="Configured provider call limit was exhausted before this batch could run",
+                lane_id=lane.lane_id if lane is not None else None,
+                attempt_count=attempt,
+                retry_count=max(attempt - 1, 0),
             )
+            last_failures.update({record.record_id: detail for record in current_batch})
             break
         if lane is not None:
             await lane.wait_for_cooldown()
@@ -264,32 +425,35 @@ async def _process_batch(
         try:
             results = await provider.summarize_batch(job.document_id, current_batch, summary_style)
         except Exception as exc:
-            error_code = (
-                "structured_output_parse_error"
-                if isinstance(exc, StructuredOutputParseError)
-                else "provider_exception"
-            )
+            detail = _exception_failure(exc, lane=lane, attempt_count=attempt + 1)
             LOGGER.error(
-                "Provider batch attempt %s failed for job %s (%s)",
+                "Provider batch attempt %s failed for job %s (%s, code=%s)",
                 attempt + 1,
                 job.job_id,
                 type(exc).__name__,
+                detail.error_code,
             )
-            last_errors.update({record.record_id: error_code for record in current_batch})
+            last_failures.update({record.record_id: detail for record in current_batch})
             valid_results: list[SummaryArtifactLine] = []
             retry_records = current_batch
-            validation_errors: dict[str, str] = {}
+            validation_errors: dict[str, FailureDetail] = {}
         else:
             valid_results, retry_records, validation_errors = _validate_results(
-                job, current_batch, results
+                job,
+                current_batch,
+                results,
+                lane=lane,
+                attempt_count=attempt + 1,
             )
         job.artifact_lines.extend(valid_results)
         job.completed_records += len(valid_results)
-        last_errors.update(validation_errors)
+        last_failures.update(validation_errors)
         current_batch = retry_records
+        job.touch()
 
         if current_batch and attempt < MAX_RETRIES:
             job.stats["retry_count"] += 1
+            job.touch()
             LOGGER.info("Retrying %s records in job %s", len(current_batch), job.job_id)
 
     if current_batch:
@@ -298,10 +462,11 @@ async def _process_batch(
             job,
             current_batch,
             summary_style,
-            error_codes=last_errors,
+            failures=last_failures,
         )
     else:
         job.stats["completed_batches"] += 1
+        job.touch()
 
 
 def _append_failed_records(
@@ -310,7 +475,8 @@ def _append_failed_records(
     summary_style: str,
     error_code: str = "exhausted_retries",
     *,
-    error_codes: dict[str, str] | None = None,
+    message: str | None = None,
+    failures: dict[str, FailureDetail] | None = None,
 ) -> None:
     artifact_record_ids = {line.record_id for line in job.artifact_lines}
     failed_records = [record for record in records if record.record_id not in artifact_record_ids]
@@ -321,6 +487,10 @@ def _append_failed_records(
     job.stats["failed_batches"] += 1
     now_str = datetime.now(timezone.utc).isoformat()
     for record in failed_records:
+        failure = (failures or {}).get(record.record_id) or FailureDetail(
+            error_code=error_code,
+            message=message or error_code.replace("_", " "),
+        )
         job.artifact_lines.append(
             SummaryArtifactLine(
                 document_id=job.document_id,
@@ -333,10 +503,16 @@ def _append_failed_records(
                 model=str(job.stats["model"]),
                 template_version=settings.summary_template_version,
                 status="failed",
-                error_code=(error_codes or {}).get(record.record_id, error_code),
+                error_code=failure.error_code,
+                message=failure.message,
+                lane_id=failure.lane_id,
+                attempt_count=failure.attempt_count,
+                retry_count=failure.retry_count,
+                usage=failure.usage,
                 created_at=now_str,
             )
         )
+    job.touch()
 
 
 def _fail_batches(
@@ -348,12 +524,14 @@ def _fail_batches(
 ) -> None:
     job.error = message
     for batch in batches:
-        _append_failed_records(job, batch, summary_style, error_code)
+        _append_failed_records(job, batch, summary_style, error_code, message=message)
     job.status = "failed"
+    job.touch()
 
 
 async def _run_job_background(job: JobState, request: SummaryRequest) -> None:
     job.status = "running"
+    job.touch()
     provider_name = settings.summary_service_provider.strip().lower()
     job.stats["provider"] = provider_name
     job.stats["model"] = settings.summary_service_model
@@ -471,6 +649,7 @@ async def _run_job_background(job: JobState, request: SummaryRequest) -> None:
             lane = await lane_queue.get()
             try:
                 job.stats["active_lanes"] += 1
+                job.touch()
                 await _process_batch(
                     job,
                     batch,
@@ -481,6 +660,7 @@ async def _run_job_background(job: JobState, request: SummaryRequest) -> None:
                 )
             finally:
                 job.stats["active_lanes"] -= 1
+                job.touch()
                 lane_queue.put_nowait(lane)
 
     results = await asyncio.gather(*(worker(batch) for batch in batches), return_exceptions=True)
@@ -491,8 +671,17 @@ async def _run_job_background(job: JobState, request: SummaryRequest) -> None:
                 job.job_id,
                 type(result).__name__,
             )
-            job.error = "Unexpected scheduler failure"
-            _append_failed_records(job, batch, request.summary_style, "provider_exception")
+            message = _sanitize_diagnostic_text(
+                f"{type(result).__name__}: {result}"
+            )
+            job.error = f"Unexpected scheduler failure: {message}"
+            failure = FailureDetail(error_code="provider_exception", message=message)
+            _append_failed_records(
+                job,
+                batch,
+                request.summary_style,
+                failures={record.record_id: failure for record in batch},
+            )
 
     processed_records = job.completed_records + job.failed_records
     job.status = (
@@ -501,7 +690,18 @@ async def _run_job_background(job: JobState, request: SummaryRequest) -> None:
         else "failed"
     )
     if job.status == "failed" and job.error is None:
-        job.error = "One or more provider results failed; inspect artifact error_code values"
+        first_failure = next(
+            (line for line in job.artifact_lines if line.status == "failed"),
+            None,
+        )
+        if first_failure is not None:
+            job.error = (
+                "One or more provider results failed; first failure: "
+                f"{first_failure.error_code}: {first_failure.message or first_failure.error or 'no detail'}"
+            )
+        else:
+            job.error = "One or more provider results failed"
+    job.touch()
 
 
 def get_job(job_id: str) -> JobState | None:
