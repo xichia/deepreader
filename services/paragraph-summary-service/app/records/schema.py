@@ -36,6 +36,7 @@ class SummaryArtifactLine(BaseModel):
     message: Optional[str] = None
     error: Optional[str] = None
     lane_id: Optional[str] = None
+    provider_alias: Optional[str] = None
     attempt_count: Optional[int] = None
     retry_count: Optional[int] = None
     usage: dict[str, Any] = Field(default_factory=dict)

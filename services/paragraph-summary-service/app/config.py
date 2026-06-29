@@ -49,11 +49,22 @@ class Settings(BaseModel):
     summary_batch_reserved_output_tokens: int = Field(
         default_factory=lambda: int(os.getenv("SUMMARY_BATCH_RESERVED_OUTPUT_TOKENS", "25000"))
     )
+    summary_batch_max_records: int = Field(
+        default_factory=lambda: int(os.getenv("SUMMARY_BATCH_MAX_RECORDS", "10"))
+    )
     summary_max_provider_calls_per_job: int = Field(
         default_factory=lambda: int(os.getenv("SUMMARY_MAX_PROVIDER_CALLS_PER_JOB", "1000"))
     )
     summary_max_input_tokens_per_job: int = Field(
         default_factory=lambda: int(os.getenv("SUMMARY_MAX_INPUT_TOKENS_PER_JOB") or "0")
+    )
+    summary_provider_rate_limit_cooldown_seconds: float = Field(
+        default_factory=lambda: float(
+            os.getenv("SUMMARY_PROVIDER_RATE_LIMIT_COOLDOWN_SECONDS", "60")
+        )
+    )
+    summary_retry_backoff_base_seconds: float = Field(
+        default_factory=lambda: float(os.getenv("SUMMARY_RETRY_BACKOFF_BASE_SECONDS", "1"))
     )
 
     def lane_credential_env_names(self) -> list[str]:
@@ -61,7 +72,7 @@ class Settings(BaseModel):
 
         return [f"GEMINI_API_KEY_LANE_{index:02d}" for index in range(1, self.summary_lane_count + 1)]
 
-    def safe_summary(self) -> dict[str, str | int | bool]:
+    def safe_summary(self) -> dict[str, str | int | float | bool]:
         """Return non-secret settings suitable for diagnostics."""
 
         return {
@@ -71,6 +82,16 @@ class Settings(BaseModel):
             "lane_count": self.summary_lane_count,
             "lane_rpm": self.summary_lane_rpm,
             "max_parallel_lanes": self.summary_max_parallel_lanes,
+            "batch_target_tokens": self.summary_batch_target_tokens,
+            "batch_hard_max_tokens": self.summary_batch_hard_max_tokens,
+            "batch_reserved_output_tokens": self.summary_batch_reserved_output_tokens,
+            "batch_max_records": self.summary_batch_max_records,
+            "max_provider_calls_per_job": self.summary_max_provider_calls_per_job,
+            "max_input_tokens_per_job": self.summary_max_input_tokens_per_job,
+            "provider_rate_limit_cooldown_seconds": (
+                self.summary_provider_rate_limit_cooldown_seconds
+            ),
+            "retry_backoff_base_seconds": self.summary_retry_backoff_base_seconds,
         }
 
 

@@ -34,3 +34,20 @@ def test_oversized_item_handling():
     assert batches[1][0].record_id == "r2"
     assert len(batches[2]) == 1
     assert batches[2][0].record_id == "r3"
+
+
+def test_record_count_cap_produces_expected_batches_for_large_document():
+    records = [
+        InputRecord(record_id=f"r{i}", text="tiny", source_hash=f"hash-{i}")
+        for i in range(5051)
+    ]
+
+    batches = pack_batches(
+        records,
+        target_tokens=50_000,
+        hard_max_tokens=75_000,
+        max_records=10,
+    )
+
+    assert len(batches) == 506
+    assert max(len(batch) for batch in batches) == 10

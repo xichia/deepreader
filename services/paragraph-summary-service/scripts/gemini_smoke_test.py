@@ -34,8 +34,12 @@ def main() -> None:
         _fail("SUMMARY_SERVICE_PROVIDER must be gemini")
     if not _enabled("SUMMARY_SERVICE_ENABLE_PROVIDER_CALLS"):
         _fail("SUMMARY_SERVICE_ENABLE_PROVIDER_CALLS must be true")
-    if not os.getenv("GEMINI_API_KEY_LANE_01", "").strip():
-        _fail("GEMINI_API_KEY_LANE_01 must be configured")
+    has_credential = any(
+        os.getenv(name, "").strip()
+        for name in ("GEMINI_API_KEY_LANE_01", "GEMINI_API_KEYS", "GEMINI_API_KEY")
+    )
+    if not has_credential:
+        _fail("a Gemini API key must be configured")
 
     source_texts = [
         "A centrifugal pump needs a stable inlet flow for reliable operation.",
@@ -109,7 +113,8 @@ def main() -> None:
 
     print(f"provider: {provider}")
     print(f"model: {os.getenv('SUMMARY_SERVICE_MODEL', 'gemini-2.5-flash')}")
-    print(f"lane count: {os.getenv('SUMMARY_LANE_COUNT', '10')}")
+    print(f"configured lane cap: {os.getenv('SUMMARY_LANE_COUNT', '10')}")
+    print(f"active provider identities: {status_payload['stats']['provider_identity_count']}")
     print(f"number of records: {len(records)}")
     print(f"completed count: {completed}")
     print(f"failed count: {failed}")

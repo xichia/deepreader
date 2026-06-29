@@ -29,10 +29,13 @@ def pack_batches(
     wrapper_overhead_tokens: int = 0,
     reserved_output_tokens: int = 0,
     include_record_overhead: bool = False,
+    max_records: int | None = None,
 ) -> list[list[InputRecord]]:
-    """Packs records into batches near target_tokens, never exceeding hard_max_tokens."""
+    """Pack by token budget while enforcing an optional record-count ceiling."""
     if target_tokens < 1 or hard_max_tokens < 1:
         raise ValueError("Token limits must be positive")
+    if max_records is not None and max_records < 1:
+        raise ValueError("Maximum records per batch must be positive")
 
     usable_hard_max = hard_max_tokens - reserved_output_tokens
     if usable_hard_max <= wrapper_overhead_tokens:
@@ -59,7 +62,10 @@ def pack_batches(
             batches.append([record])
             continue
 
-        if current_tokens + tokens > input_target and current_batch:
+        if current_batch and (
+            current_tokens + tokens > input_target
+            or (max_records is not None and len(current_batch) >= max_records)
+        ):
             batches.append(current_batch)
             current_batch = []
             current_tokens = wrapper_overhead_tokens

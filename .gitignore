@@ -52,3 +52,4 @@ uploads/
 backend/uploads/
 backend/output/
 backend/.local/
+.tmp/

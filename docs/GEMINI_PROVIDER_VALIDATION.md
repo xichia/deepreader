@@ -12,9 +12,11 @@ The v0.5 behavior remains the default. `SUMMARY_SERVICE_PROVIDER=mock` requires 
 
 The intended ten-lane experiment uses ten independent Gemini projects and quota pools. Ten keys created in one project must not be assumed to provide ten independent quotas. DeepReader does not discover quotas automatically; it only applies the configured per-lane cooldown and concurrency caps.
 
-`SUMMARY_LANE_RPM` is a per-lane/per-key limit. Effective total RPM is `SUMMARY_MAX_PARALLEL_LANES * SUMMARY_LANE_RPM`; with 10 parallel lanes and 4 RPM per lane, the configured maximum is 40 provider calls per minute across the service.
+`SUMMARY_LANE_RPM` is a per-key limit. Every unique key gets its own Gemini client, safe alias (`gemini_01`, `gemini_02`, and so on), RPM clock, one-request in-flight cap, and rate-limit cooldown. Effective aggregate RPM is `configured provider identities * SUMMARY_LANE_RPM`; `SUMMARY_MAX_PARALLEL_LANES` separately caps concurrent in-flight calls.
 
-When Gemini is selected, startup/request validation requires one non-empty key for every configured lane. Key values are retained only in runtime lane/provider objects and are excluded from API responses, artifacts, configuration summaries, and logs.
+`SUMMARY_LANE_COUNT` is a legacy/configured upper bound, not a requirement that every numbered variable be populated. The service accepts numbered `GEMINI_API_KEY_LANE_01` variables, a comma/newline/semicolon-separated `GEMINI_API_KEYS` pool, or the single-key `GEMINI_API_KEY` fallback. Duplicate values are collapsed. Active lanes never exceed the number of unique configured identities or `SUMMARY_MAX_PARALLEL_LANES`.
+
+Key values are retained only in runtime lane/provider objects and are excluded from API responses, artifacts, configuration summaries, and logs. Job status exposes aliases, calls and rate-limit counts per alias, cooldown aliases, scheduler parallelism, batch counts, and the effective non-secret configuration.
 
 ## Start with one lane
 
@@ -36,6 +38,7 @@ SUMMARY_MAX_PARALLEL_LANES=1
 SUMMARY_BATCH_TARGET_TOKENS=50000
 SUMMARY_BATCH_HARD_MAX_TOKENS=75000
 SUMMARY_BATCH_RESERVED_OUTPUT_TOKENS=25000
+SUMMARY_BATCH_MAX_RECORDS=10
 
 SUMMARY_MAX_PROVIDER_CALLS_PER_JOB=1000
 
@@ -102,7 +105,7 @@ Open `http://127.0.0.1:5173`, upload a small non-sensitive PDF, inspect its extr
 
 The recommended batch target was reduced from 200k to 50k after a real run packed 347,169 estimated input tokens into only two large batches. Both provider batches failed after retries, and the resulting artifact exposed only `provider_exception` without actionable detail. The 50k target is a stability and diagnostic default, not a hard architectural limit.
 
-The recommended local values are a 50,000-token batch target, a 75,000-token hard maximum, 25,000 reserved output tokens, and 1,000 provider calls per job. `SUMMARY_MAX_INPUT_TOKENS_PER_JOB` remains disabled when unset, empty, or `0`; a positive integer can opt into a job-level cap.
+The recommended local values are a 50,000-token batch target, a 75,000-token hard maximum, 25,000 reserved output tokens, 10 records per call, and 1,000 provider calls per job. The record cap matters for paragraph-heavy documents: 5,051 tiny records produce 506 batches rather than a few oversized token-only batches. `SUMMARY_MAX_INPUT_TOKENS_PER_JOB` remains disabled when unset, empty, or `0`; a positive integer can opt into a job-level cap.
 
 ### Stage A: synthetic smoke test
 
@@ -145,6 +148,7 @@ SUMMARY_MAX_PROVIDER_CALLS_PER_JOB=1000
 SUMMARY_BATCH_TARGET_TOKENS=50000
 SUMMARY_BATCH_HARD_MAX_TOKENS=75000
 SUMMARY_BATCH_RESERVED_OUTPUT_TOKENS=25000
+SUMMARY_BATCH_MAX_RECORDS=10
 
 GEMINI_API_KEY_LANE_01=...
 GEMINI_API_KEY_LANE_02=...
@@ -158,7 +162,30 @@ GEMINI_API_KEY_LANE_09=...
 GEMINI_API_KEY_LANE_10=...
 ```
 
-Observe batch count, lane assignment, completed/failed records, retries, and rate-limit behavior before changing budgets.
+Observe batch count, alias assignment, calls per alias, completed/failed records, retries, and rate-limit behavior before changing budgets.
+
+### Large-document verification overrides
+
+After loading `.env.local`, start the summary service with the effective scheduler values inline:
+
+```bash
+cd services/paragraph-summary-service
+source .venv/bin/activate
+set -a
+source ../../.env.local
+set +a
+
+SUMMARY_MAX_PARALLEL_LANES=10 \
+SUMMARY_LANE_RPM=1 \
+SUMMARY_BATCH_MAX_RECORDS=10 \
+SUMMARY_BATCH_TARGET_TOKENS=3000 \
+SUMMARY_BATCH_HARD_MAX_TOKENS=12000 \
+SUMMARY_BATCH_RESERVED_OUTPUT_TOKENS=4000 \
+SUMMARY_MAX_PROVIDER_CALLS_PER_JOB=1000 \
+PYTHONPATH=. python3 -m uvicorn app.main:app --host 127.0.0.1 --port 8001
+```
+
+For a 5,051-record job, `/jobs/{job_id}` should report 506 `total_batches`, at most ten provider identities/parallel lanes, `provider_calls_by_alias` distributed across configured aliases, and `batch_max_records: 10`. Provider-call logs should always report `batch_records` at or below ten.
 
 ## Running the full PDF test
 
@@ -187,7 +214,7 @@ Follow this workflow to validate PDF extraction and remote summary generation en
 
 ## Rate-limit recovery
 
-On a 429 or other provider exception, the dispatcher retries only within the configured call cap and writes sanitized failed artifact lines after exhaustion. Each line includes a stable error code plus provider/model, lane, attempt/retry, and available usage details without credentials or source text. Do not rapidly resubmit. Wait for the project quota window/cooldown, reduce parallel lanes or batch count if needed, then run Generate summaries again. The backend job checkpoints already imported Gemini summaries with matching source hashes and resubmits only records that still need work.
+On a 429, only the affected alias enters a jittered exponential cooldown; other aliases continue. If every identity is cooling down, their workers wait rather than issuing immediate retries. Other provider failures use a shorter jittered retry backoff. The dispatcher still respects the job-wide call cap and writes sanitized failed artifact lines after exhaustion. Each line includes a stable error code plus provider/model, lane, safe provider alias, attempt/retry, and available usage details without credentials or source text. Do not rapidly resubmit. Wait for the project quota window/cooldown, then run Generate summaries again. The backend job checkpoints already imported Gemini summaries with matching source hashes and resubmits only records that still need work.
 
 ## Offline verification
 
@@ -213,6 +240,8 @@ Docker is optional for this branch. The checked-in Compose configuration remains
 
 - Free-tier privacy and data-use caveats apply; do not submit private PDFs.
 - Paragraph-service jobs and cooldown state are in memory and not durable.
+- Limiters are process-local; run one paragraph-service worker for this local demo.
+- With 506 batches, ten identities, and one RPM per identity, a clean full run takes at least about 51 minutes before retries or provider latency.
 - Scanned PDFs have no OCR path.
 - The service does not use the Gemini provider Batch API.
 - Local `.env.local` files are not a production secret manager.

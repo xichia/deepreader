@@ -32,6 +32,7 @@ _SECRET_ASSIGNMENT_RE = re.compile(
     r"\s*[:=]\s*(?:bearer\s+)?[^\s,;]+"
 )
 _GOOGLE_API_KEY_RE = re.compile(r"AIza[0-9A-Za-z_-]{16,}")
+_GEMINI_LANE_KEY_RE = re.compile(r"^GEMINI_API_KEY_LANE_(\d+)$")
 
 # In-memory storage for the local validation service.
 JOBS: dict[str, "JobState"] = {}
@@ -46,6 +47,7 @@ class FailureDetail:
     error_code: str
     message: str
     lane_id: str | None = None
+    provider_alias: str | None = None
     attempt_count: int | None = None
     retry_count: int | None = None
     usage: dict[str, Any] = field(default_factory=dict)
@@ -146,6 +148,7 @@ def _exception_failure(
         error_code=_provider_error_code(exc),
         message=message,
         lane_id=lane.lane_id if lane is not None else None,
+        provider_alias=lane.provider_alias if lane is not None else None,
         attempt_count=attempt_count,
         retry_count=max(attempt_count - 1, 0),
         usage=_exception_usage(exc),
@@ -168,31 +171,125 @@ class JobState:
             "total_batches": 0,
             "completed_batches": 0,
             "failed_batches": 0,
+            "configured_lane_count": settings.summary_lane_count,
             "lane_count": settings.summary_lane_count,
             "active_lanes": 0,
+            "scheduler_parallelism": 0,
+            "provider_identity_count": 0,
+            "configured_provider_identity_count": 0,
+            "provider_aliases": [],
+            "active_provider_aliases": [],
+            "active_batches_by_alias": {},
+            "provider_calls_by_alias": {},
+            "rate_limit_count": 0,
+            "rate_limit_count_by_alias": {},
+            "cooldown_aliases": [],
+            "cooldown_count": 0,
             "retry_count": 0,
             "provider_calls_attempted": 0,
             "estimated_input_tokens": 0,
+            "batch_max_records": settings.summary_batch_max_records,
             "provider": settings.summary_service_provider,
             "model": settings.summary_service_model,
+            "effective_config": settings.safe_summary(),
         }
         self._provider_call_lock = asyncio.Lock()
 
     def touch(self) -> None:
         self.updated_at = datetime.now(timezone.utc).isoformat()
 
-    async def claim_provider_call(self, maximum: int | None) -> bool:
+    async def claim_provider_call(
+        self,
+        maximum: int | None,
+        provider_alias: str | None = None,
+    ) -> bool:
         async with self._provider_call_lock:
             attempted = int(self.stats["provider_calls_attempted"])
             if maximum is not None and attempted >= maximum:
                 return False
             self.stats["provider_calls_attempted"] = attempted + 1
+            if provider_alias:
+                calls_by_alias = self.stats["provider_calls_by_alias"]
+                calls_by_alias[provider_alias] = calls_by_alias.get(provider_alias, 0) + 1
             self.touch()
             return True
 
+    def provider_batch_started(self, provider_alias: str) -> None:
+        active = self.stats["active_batches_by_alias"]
+        active[provider_alias] = active.get(provider_alias, 0) + 1
+        self.stats["active_lanes"] = sum(1 for count in active.values() if count > 0)
+        self.stats["active_provider_aliases"] = sorted(
+            alias for alias, count in active.items() if count > 0
+        )
+        self.touch()
+
+    def provider_batch_finished(self, provider_alias: str) -> None:
+        active = self.stats["active_batches_by_alias"]
+        active[provider_alias] = max(0, active.get(provider_alias, 0) - 1)
+        self.stats["active_lanes"] = sum(1 for count in active.values() if count > 0)
+        self.stats["active_provider_aliases"] = sorted(
+            alias for alias, count in active.items() if count > 0
+        )
+        self.touch()
+
+    def record_rate_limit(self, provider_alias: str, *, cooling_down: bool) -> None:
+        counts = self.stats["rate_limit_count_by_alias"]
+        counts[provider_alias] = counts.get(provider_alias, 0) + 1
+        self.stats["rate_limit_count"] = int(self.stats["rate_limit_count"]) + 1
+        self.set_provider_cooldown(provider_alias, cooling_down)
+
+    def set_provider_cooldown(self, provider_alias: str, cooling_down: bool) -> None:
+        aliases = set(self.stats["cooldown_aliases"])
+        if cooling_down:
+            aliases.add(provider_alias)
+        else:
+            aliases.discard(provider_alias)
+        self.stats["cooldown_aliases"] = sorted(aliases)
+        self.stats["cooldown_count"] = len(aliases)
+        self.touch()
+
+
+def _configured_gemini_credentials() -> dict[str, str]:
+    """Load unique Gemini identities without ever deriving aliases from key values."""
+
+    candidates: list[tuple[str, str]] = []
+    numbered_names = sorted(
+        (
+            (int(match.group(1)), name)
+            for name in os.environ
+            if (match := _GEMINI_LANE_KEY_RE.match(name)) is not None
+            and int(match.group(1)) <= settings.summary_lane_count
+        ),
+        key=lambda item: item[0],
+    )
+    for _, env_name in numbered_names:
+        value = os.getenv(env_name, "").strip()
+        if value:
+            candidates.append((env_name, value))
+
+    pooled_value = os.getenv("GEMINI_API_KEYS", "")
+    for index, value in enumerate(re.split(r"[,;\n]", pooled_value), start=1):
+        if value.strip():
+            candidates.append((f"GEMINI_API_KEYS[{index}]", value.strip()))
+
+    single_value = os.getenv("GEMINI_API_KEY", "").strip()
+    if single_value:
+        candidates.append(("GEMINI_API_KEY", single_value))
+
+    credentials: dict[str, str] = {}
+    seen_values: set[str] = set()
+    for source_name, value in candidates:
+        if value in seen_values:
+            continue
+        credentials[source_name] = value
+        seen_values.add(value)
+        if len(credentials) >= settings.summary_lane_count:
+            break
+    return credentials
+
 
 def validate_provider_configuration() -> dict[str, str]:
-    """Validate provider opt-in and return lane credentials keyed by env name."""
+    """Validate provider opt-in and return unique credentials keyed by safe source name."""
 
     provider = settings.summary_service_provider.strip().lower()
     if provider not in {"mock", "gemini"}:
@@ -209,6 +306,14 @@ def validate_provider_configuration() -> dict[str, str]:
         raise ProviderConfigurationError(
             "SUMMARY_BATCH_TARGET_TOKENS cannot exceed SUMMARY_BATCH_HARD_MAX_TOKENS"
         )
+    if settings.summary_batch_max_records < 1:
+        raise ProviderConfigurationError("SUMMARY_BATCH_MAX_RECORDS must be at least 1")
+    if settings.summary_provider_rate_limit_cooldown_seconds < 0:
+        raise ProviderConfigurationError(
+            "SUMMARY_PROVIDER_RATE_LIMIT_COOLDOWN_SECONDS cannot be negative"
+        )
+    if settings.summary_retry_backoff_base_seconds < 0:
+        raise ProviderConfigurationError("SUMMARY_RETRY_BACKOFF_BASE_SECONDS cannot be negative")
 
     if provider == "mock":
         return {}
@@ -232,19 +337,11 @@ def validate_provider_configuration() -> dict[str, str]:
     if settings.summary_max_input_tokens_per_job < 0:
         raise ProviderConfigurationError("SUMMARY_MAX_INPUT_TOKENS_PER_JOB cannot be negative")
 
-    credentials: dict[str, str] = {}
-    missing_names: list[str] = []
-    for env_name in settings.lane_credential_env_names():
-        value = os.getenv(env_name, "").strip()
-        if value:
-            credentials[env_name] = value
-        else:
-            missing_names.append(env_name)
-
-    if missing_names:
-        missing = ", ".join(missing_names)
+    credentials = _configured_gemini_credentials()
+    if not credentials:
         raise ProviderConfigurationError(
-            f"Gemini requires one configured key per enabled lane; missing: {missing}"
+            "Gemini requires at least one credential; configure GEMINI_API_KEY_LANE_01, "
+            "GEMINI_API_KEYS, or GEMINI_API_KEY"
         )
     return credentials
 
@@ -257,10 +354,15 @@ def _build_lanes_and_providers(
     lanes: list[QuotaLane] = []
     providers: dict[str, Any] = {}
 
-    for lane_number in range(1, settings.summary_lane_count + 1):
+    identity_items: list[tuple[str | None, str | None]]
+    if provider_name == "gemini":
+        identity_items = list(credentials.items())[: settings.summary_lane_count]
+    else:
+        identity_items = [(None, None)] * settings.summary_lane_count
+
+    for lane_number, (env_name, api_key) in enumerate(identity_items, start=1):
         lane_id = f"lane_{lane_number:02d}"
-        env_name = f"GEMINI_API_KEY_LANE_{lane_number:02d}" if provider_name == "gemini" else None
-        api_key = credentials.get(env_name) if env_name else None
+        provider_alias = f"{provider_name}_{lane_number:02d}"
         lane = QuotaLane(
             lane_id,
             settings.summary_lane_rpm,
@@ -269,6 +371,11 @@ def _build_lanes_and_providers(
             model=settings.summary_service_model,
             credential_env_name=env_name,
             api_key=api_key,
+            provider_alias=provider_alias,
+            rate_limit_cooldown_seconds=(
+                settings.summary_provider_rate_limit_cooldown_seconds
+            ),
+            retry_backoff_base_seconds=settings.summary_retry_backoff_base_seconds,
         )
         lanes.append(lane)
         if provider_name == "gemini":
@@ -312,6 +419,7 @@ def _validate_results(
             error_code=error_code,
             message=message,
             lane_id=lane.lane_id if lane is not None else None,
+            provider_alias=lane.provider_alias if lane is not None else None,
             attempt_count=attempt_count,
             retry_count=max((attempt_count or 1) - 1, 0),
         )
@@ -363,8 +471,19 @@ def _validate_results(
             result_message = result.message or result.error or "Provider returned a failed result"
             errors[record_id] = FailureDetail(
                 error_code=result.error_code or "provider_exception",
-                message=_sanitize_diagnostic_text(result_message),
+                message=_sanitize_diagnostic_text(
+                    result_message,
+                    secret_values=(
+                        (lane.api_key,)
+                        if lane is not None and lane.api_key
+                        else ()
+                    ),
+                ),
                 lane_id=result.lane_id or (lane.lane_id if lane is not None else None),
+                provider_alias=(
+                    result.provider_alias
+                    or (lane.provider_alias if lane is not None else None)
+                ),
                 attempt_count=result.attempt_count or attempt_count,
                 retry_count=(
                     result.retry_count
@@ -390,6 +509,9 @@ def _validate_results(
             )
             retry_records.append(record)
             continue
+        if lane is not None:
+            result.lane_id = result.lane_id or lane.lane_id
+            result.provider_alias = result.provider_alias or lane.provider_alias
         valid_results.append(result)
 
     return valid_results, retry_records, errors
@@ -409,30 +531,82 @@ async def _process_batch(
     for attempt in range(MAX_RETRIES + 1):
         if not current_batch:
             break
-        if not await job.claim_provider_call(max_provider_calls):
+        provider_alias = lane.provider_alias if lane is not None else None
+        if not await job.claim_provider_call(max_provider_calls, provider_alias):
             detail = FailureDetail(
                 error_code="max_provider_calls_exceeded",
                 message="Configured provider call limit was exhausted before this batch could run",
                 lane_id=lane.lane_id if lane is not None else None,
+                provider_alias=provider_alias,
                 attempt_count=attempt,
                 retry_count=max(attempt - 1, 0),
             )
             last_failures.update({record.record_id: detail for record in current_batch})
             break
-        if lane is not None:
-            await lane.wait_for_cooldown()
 
         try:
-            results = await provider.summarize_batch(job.document_id, current_batch, summary_style)
+            if lane is not None:
+                if lane.is_rate_limit_cooling_down():
+                    job.set_provider_cooldown(lane.provider_alias, True)
+                async with lane.provider_call_slot():
+                    await lane.wait_for_cooldown()
+                    job.set_provider_cooldown(lane.provider_alias, False)
+                    LOGGER.info(
+                        "Provider call job_id=%s lane_id=%s provider_alias=%s model=%s "
+                        "batch_records=%s input_tokens_est=%s attempt=%s",
+                        job.job_id,
+                        lane.lane_id,
+                        lane.provider_alias,
+                        lane.model,
+                        len(current_batch),
+                        estimate_batch_input_tokens(
+                            current_batch,
+                            wrapper_overhead_tokens=(
+                                GEMINI_PROMPT_OVERHEAD_TOKENS
+                                if lane.provider == "gemini"
+                                else 0
+                            ),
+                        ),
+                        attempt + 1,
+                    )
+                    results = await provider.summarize_batch(
+                        job.document_id,
+                        current_batch,
+                        summary_style,
+                    )
+            else:
+                results = await provider.summarize_batch(
+                    job.document_id,
+                    current_batch,
+                    summary_style,
+                )
         except Exception as exc:
             detail = _exception_failure(exc, lane=lane, attempt_count=attempt + 1)
-            LOGGER.error(
-                "Provider batch attempt %s failed for job %s (%s, code=%s)",
-                attempt + 1,
-                job.job_id,
-                type(exc).__name__,
-                detail.error_code,
-            )
+            if lane is not None and detail.error_code == "provider_rate_limited":
+                delay = lane.defer_after_rate_limit(attempt + 1)
+                job.record_rate_limit(lane.provider_alias, cooling_down=True)
+                LOGGER.warning(
+                    "Provider rate limited lane_id=%s provider_alias=%s model=%s "
+                    "attempt=%s cooldown_seconds=%.2f",
+                    lane.lane_id,
+                    lane.provider_alias,
+                    lane.model,
+                    attempt + 1,
+                    delay,
+                )
+            else:
+                if lane is not None and attempt < MAX_RETRIES:
+                    lane.defer_before_retry(attempt + 1)
+                LOGGER.error(
+                    "Provider batch attempt %s failed for job %s "
+                    "lane_id=%s provider_alias=%s (%s, code=%s)",
+                    attempt + 1,
+                    job.job_id,
+                    lane.lane_id if lane is not None else None,
+                    provider_alias,
+                    type(exc).__name__,
+                    detail.error_code,
+                )
             last_failures.update({record.record_id: detail for record in current_batch})
             valid_results: list[SummaryArtifactLine] = []
             retry_records = current_batch
@@ -445,6 +619,25 @@ async def _process_batch(
                 lane=lane,
                 attempt_count=attempt + 1,
             )
+            if lane is not None and retry_records:
+                rate_limited = any(
+                    failure.error_code == "provider_rate_limited"
+                    for failure in validation_errors.values()
+                )
+                if rate_limited:
+                    delay = lane.defer_after_rate_limit(attempt + 1)
+                    job.record_rate_limit(lane.provider_alias, cooling_down=True)
+                    LOGGER.warning(
+                        "Provider result rate limited lane_id=%s provider_alias=%s "
+                        "model=%s attempt=%s cooldown_seconds=%.2f",
+                        lane.lane_id,
+                        lane.provider_alias,
+                        lane.model,
+                        attempt + 1,
+                        delay,
+                    )
+                elif attempt < MAX_RETRIES:
+                    lane.defer_before_retry(attempt + 1)
         job.artifact_lines.extend(valid_results)
         job.completed_records += len(valid_results)
         last_failures.update(validation_errors)
@@ -454,7 +647,12 @@ async def _process_batch(
         if current_batch and attempt < MAX_RETRIES:
             job.stats["retry_count"] += 1
             job.touch()
-            LOGGER.info("Retrying %s records in job %s", len(current_batch), job.job_id)
+            LOGGER.info(
+                "Retrying %s records in job %s provider_alias=%s",
+                len(current_batch),
+                job.job_id,
+                provider_alias,
+            )
 
     if current_batch:
         LOGGER.error("Exhausted retries for %s records in job %s", len(current_batch), job.job_id)
@@ -506,6 +704,7 @@ def _append_failed_records(
                 error_code=failure.error_code,
                 message=failure.message,
                 lane_id=failure.lane_id,
+                provider_alias=failure.provider_alias,
                 attempt_count=failure.attempt_count,
                 retry_count=failure.retry_count,
                 usage=failure.usage,
@@ -535,6 +734,9 @@ async def _run_job_background(job: JobState, request: SummaryRequest) -> None:
     provider_name = settings.summary_service_provider.strip().lower()
     job.stats["provider"] = provider_name
     job.stats["model"] = settings.summary_service_model
+    job.stats["configured_lane_count"] = settings.summary_lane_count
+    job.stats["batch_max_records"] = settings.summary_batch_max_records
+    job.stats["effective_config"] = settings.safe_summary()
 
     try:
         credentials = validate_provider_configuration()
@@ -558,12 +760,14 @@ async def _run_job_background(job: JobState, request: SummaryRequest) -> None:
                 wrapper_overhead_tokens=GEMINI_PROMPT_OVERHEAD_TOKENS,
                 reserved_output_tokens=settings.summary_batch_reserved_output_tokens,
                 include_record_overhead=True,
+                max_records=settings.summary_batch_max_records,
             )
         else:
             batches = pack_batches(
                 request.records,
                 settings.summary_batch_target_tokens,
                 settings.summary_batch_hard_max_tokens,
+                max_records=settings.summary_batch_max_records,
             )
     except ValueError as exc:
         job.stats["total_batches"] = 1
@@ -611,16 +815,6 @@ async def _run_job_background(job: JobState, request: SummaryRequest) -> None:
                 "Estimated Gemini input exceeds configured token safety caps",
             )
             return
-        if len(batches) > settings.summary_max_provider_calls_per_job:
-            _fail_batches(
-                job,
-                batches,
-                request.summary_style,
-                "max_provider_calls_exceeded",
-                "Gemini job requires more provider calls than the configured safety cap",
-            )
-            return
-
     try:
         lanes, providers = _build_lanes_and_providers(provider_name, credentials)
     except Exception as exc:
@@ -635,10 +829,31 @@ async def _run_job_background(job: JobState, request: SummaryRequest) -> None:
         return
 
     job.stats["lane_count"] = len(lanes)
+    provider_aliases = [lane.provider_alias for lane in lanes]
+    job.stats["provider_identity_count"] = len(lanes)
+    job.stats["configured_provider_identity_count"] = len(lanes)
+    job.stats["provider_aliases"] = provider_aliases
+    job.stats["active_batches_by_alias"] = {alias: 0 for alias in provider_aliases}
+    job.stats["provider_calls_by_alias"] = {alias: 0 for alias in provider_aliases}
+    job.stats["rate_limit_count_by_alias"] = {alias: 0 for alias in provider_aliases}
     lane_queue: asyncio.Queue[QuotaLane] = asyncio.Queue()
     for lane in lanes:
         lane_queue.put_nowait(lane)
     parallelism = min(settings.summary_max_parallel_lanes, len(lanes))
+    job.stats["scheduler_parallelism"] = parallelism
+    LOGGER.info(
+        "Summary scheduler job_id=%s provider=%s configured_lanes=%s "
+        "provider_identities=%s parallelism=%s provider_aliases=%s "
+        "total_batches=%s batch_max_records=%s",
+        job.job_id,
+        provider_name,
+        settings.summary_lane_count,
+        len(lanes),
+        parallelism,
+        ",".join(provider_aliases),
+        len(batches),
+        settings.summary_batch_max_records,
+    )
     semaphore = asyncio.Semaphore(parallelism)
     maximum_calls = (
         settings.summary_max_provider_calls_per_job if provider_name == "gemini" else None
@@ -648,8 +863,7 @@ async def _run_job_background(job: JobState, request: SummaryRequest) -> None:
         async with semaphore:
             lane = await lane_queue.get()
             try:
-                job.stats["active_lanes"] += 1
-                job.touch()
+                job.provider_batch_started(lane.provider_alias)
                 await _process_batch(
                     job,
                     batch,
@@ -659,8 +873,7 @@ async def _run_job_background(job: JobState, request: SummaryRequest) -> None:
                     lane=lane,
                 )
             finally:
-                job.stats["active_lanes"] -= 1
-                job.touch()
+                job.provider_batch_finished(lane.provider_alias)
                 lane_queue.put_nowait(lane)
 
     results = await asyncio.gather(*(worker(batch) for batch in batches), return_exceptions=True)
