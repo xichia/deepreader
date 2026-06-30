@@ -803,6 +803,38 @@ def _append_failed_records(
     job.touch()
 
 
+def _append_cancelled_records(
+    job: JobState,
+    records: list[InputRecord],
+    summary_style: str,
+) -> None:
+    artifact_record_ids = {line.record_id for line in job.artifact_lines}
+    cancelled_records = [record for record in records if record.record_id not in artifact_record_ids]
+    if not cancelled_records:
+        return
+
+    now_str = datetime.now(timezone.utc).isoformat()
+    for record in cancelled_records:
+        job.artifact_lines.append(
+            SummaryArtifactLine(
+                document_id=job.document_id,
+                record_id=record.record_id,
+                stable_id=record.stable_id,
+                source_hash=record.source_hash,
+                summary_text="",
+                summary_style=summary_style,
+                provider=str(job.stats["provider"]),
+                model=str(job.stats["model"]),
+                template_version=settings.summary_template_version,
+                status="skipped",
+                error_code="job_cancelled",
+                message="Job was cancelled",
+                created_at=now_str,
+            )
+        )
+    job.touch()
+
+
 def _fail_batches(
     job: JobState,
     batches: list[list[InputRecord]],
@@ -1013,6 +1045,21 @@ async def _run_job_background(job: JobState, request: SummaryRequest) -> None:
             lane = await acquire_best_lane()
             if lanes and lane is None:
                 batch_queue.task_done()
+                if job.status == "cancelled":
+                    _append_cancelled_records(job, batch, request.summary_style)
+                else:
+                    detail = FailureDetail(
+                        error_code="job_stopped",
+                        message="Job was stopped or cancelled",
+                        attempt_count=ordinary_attempts + rate_limit_attempts,
+                        retry_count=ordinary_attempts + rate_limit_attempts,
+                    )
+                    _append_failed_records(
+                        job,
+                        batch,
+                        request.summary_style,
+                        failures={record.record_id: detail for record in batch},
+                    )
                 continue
 
             lane_id = lane.lane_id if lane is not None else "default"
@@ -1096,18 +1143,25 @@ async def _run_job_background(job: JobState, request: SummaryRequest) -> None:
     while not batch_queue.empty():
         try:
             batch, ordinary, rate_limit = batch_queue.get_nowait()
-            detail = FailureDetail(
-                error_code="job_stopped",
-                message="Job was stopped or cancelled",
-                attempt_count=ordinary + rate_limit,
-                retry_count=ordinary + rate_limit,
-            )
-            _append_failed_records(
-                job,
-                batch,
-                request.summary_style,
-                failures={record.record_id: detail for record in batch},
-            )
+            if job.status == "cancelled":
+                _append_cancelled_records(
+                    job,
+                    batch,
+                    request.summary_style,
+                )
+            else:
+                detail = FailureDetail(
+                    error_code="job_stopped",
+                    message="Job was stopped or cancelled",
+                    attempt_count=ordinary + rate_limit,
+                    retry_count=ordinary + rate_limit,
+                )
+                _append_failed_records(
+                    job,
+                    batch,
+                    request.summary_style,
+                    failures={record.record_id: detail for record in batch},
+                )
             batch_queue.task_done()
         except asyncio.QueueEmpty:
             break

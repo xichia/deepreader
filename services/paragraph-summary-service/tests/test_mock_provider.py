@@ -63,3 +63,37 @@ async def test_mock_provider_delay_and_cancellation(monkeypatch):
 
     assert job.status == "cancelled"
     # Delay was respected and cancellation caught it
+
+
+@pytest.mark.asyncio
+async def test_cancellation_accounting_does_not_inflate_failed(monkeypatch):
+    from app.config import settings
+    from app.scheduler.dispatcher import JobState, _run_job_background
+    from app.records.schema import SummaryRequest
+
+    monkeypatch.setattr(settings, "summary_service_provider", "mock")
+    monkeypatch.setattr(settings, "summary_mock_provider_delay_ms", 100)
+
+    # 10 records, but batch size is 1, so they'll be processed one by one
+    monkeypatch.setattr(settings, "summary_batch_max_records", 1)
+    monkeypatch.setattr(settings, "summary_lane_count", 1)
+
+    records = [
+        InputRecord(record_id=f"r{i}", text="test text", source_hash=f"h{i}")
+        for i in range(10)
+    ]
+    request = SummaryRequest(document_id="doc2", records=records)
+    job = JobState("job2", "doc2", 10)
+
+    task = asyncio.create_task(_run_job_background(job, request))
+    await asyncio.sleep(0.02)  # yield to start processing
+    job.status = "cancelled"
+    await task
+
+    assert job.status == "cancelled"
+    # Ensure failed records count is 0 (since no provider errors happened, only cancellation)
+    assert job.failed_records == 0
+    # Ensure unstarted records are appended to artifact_lines with status "skipped"
+    assert len(job.artifact_lines) == 10
+    skipped_count = sum(1 for line in job.artifact_lines if line.status == "skipped")
+    assert skipped_count > 0
