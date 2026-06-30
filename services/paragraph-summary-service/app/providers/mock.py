@@ -1,9 +1,13 @@
+import asyncio
 from datetime import datetime, timezone
 from app.providers.base import BaseProvider
 from app.records.schema import InputRecord, SummaryArtifactLine
+from app.config import settings
 
 class MockProvider(BaseProvider):
     async def summarize_batch(self, document_id: str, records: list[InputRecord], summary_style: str) -> list[SummaryArtifactLine]:
+        if settings.summary_mock_provider_delay_ms > 0:
+            await asyncio.sleep(settings.summary_mock_provider_delay_ms / 1000.0)
         results = []
         for r in records:
             # Deterministic one-sentence summary

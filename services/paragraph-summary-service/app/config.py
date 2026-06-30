@@ -78,6 +78,9 @@ class Settings(BaseModel):
     summary_adaptive_rpm_backoff_factor: float = Field(
         default_factory=lambda: float(os.getenv("SUMMARY_ADAPTIVE_RPM_BACKOFF_FACTOR", "0.5"))
     )
+    summary_mock_provider_delay_ms: int = Field(
+        default_factory=lambda: int(os.getenv("SUMMARY_MOCK_PROVIDER_DELAY_MS", "0"))
+    )
 
     def lane_credential_env_names(self) -> list[str]:
         """Return the configured lane variable names without reading key values."""
