@@ -19,23 +19,31 @@ To optimize provider API usage and verify scaling boundaries:
 * **Phase 1 (Completed & Validated)**:
   * In-memory pause/resume lifecycle controls implemented inside `paragraph-summary-service`.
   * Validated via targeted unit tests and mock-provider smoke tests.
-* **Phase 2 (Planned)**:
+* **Phase 2 (Completed & Validated)**:
   * Backend pause/resume proxy endpoint additions.
   * Polling support updates in the main dashboard server.
-* **Phase 3 (Planned)**:
+* **Phase 3 (Completed & Validated)**:
   * Frontend dashboard controls integration (buttons/status pills).
-* **Phase 4 (Planned)**:
+* **Phase 4 (Completed & Validated)**:
   * Full mock-smoke validation and developer docs update.
+  * Makefile execution and helper targets integrated.
 
 ## 3. Deferred OpenStax Validation
 
-* OpenStax large-document validation remains **intentionally deferred**.
+* OpenStax large-document validation remains **intentionally deferred** until explicitly approved.
+* **Guarded Workflow**: A bounded validation workflow is documented at [docs/validation-workflows.md](file:///Users/ianchia/deepreader/docs/validation-workflows.md) and can be checked via `make openstax-bounded-validation-help`.
 * **Pre-requisites**: Proceed with OpenStax validation only after:
   * Pipeline lifecycle controls (pause, resume, cancel) are fully integrated across all layers.
   * Batch-size limits are verified and stable.
   * API quota headroom is confirmed.
 
-## 4. Tracking Rules
+## 4. Reusable Gemini Canary Script
+
+* A reusable synthetic Gemini batch-size escalation canary script is available at [scripts/canary_gemini_batch_escalation.py](file:///Users/ianchia/deepreader/scripts/canary_gemini_batch_escalation.py).
+* Instructions are queryable via `make canary-gemini-batch-help`.
+* Runs remain manual/deferred and will consume actual Gemini API quota.
+
+## 5. Tracking Rules
 
 * **docs/validation-log.md**: Records only proven results, completed validation runs, and verified fixes.
 * **docs/project-log/feature-notes.md**: Records future planning, candidate configurations, and deferred scaling tasks.

@@ -238,6 +238,17 @@ Final result:
 - No Gemini calls
 - No OpenStax
 
+## 2026-06-30 — Guarded validation workflow tools added
+
+Validated:
+- Makefile targets added:
+  - `smoke-mock-lifecycle-help` and `smoke-mock-lifecycle`
+  - `canary-gemini-batch-help`
+  - `openstax-bounded-validation-help`
+- Added synthetic Gemini batch-size escalation canary script at `scripts/canary_gemini_batch_escalation.py`.
+- Added bounded OpenStax validation workflow documentation at `docs/validation-workflows.md`.
+- Both Gemini batch escalation and OpenStax validation remain manual/deferred to protect API quota, and were not run.
+
 ## Current validated state
 
 - Backend pause/resume proxy implemented and tested.
@@ -250,4 +261,3 @@ Final result:
 
 - OpenStax bounded validation remains deferred.
 - Gemini batch-size escalation remains deferred.
-- Optional future work: add CI hook or documented make target for mock lifecycle smoke.
