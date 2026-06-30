@@ -47,7 +47,7 @@ export type JobStep = {
   target_type: string;
   target_id: number;
   target_stable_id: string | null;
-  status: "pending" | "running" | "completed" | "failed" | "cancelled";
+  status: "pending" | "running" | "completed" | "failed" | "cancelled" | "paused";
   attempt_count: number;
   error_message: string | null;
   created_at: string;
@@ -59,7 +59,7 @@ export type Job = {
   id: number;
   document_id: number;
   job_type: string;
-  status: "pending" | "running" | "completed" | "failed" | "cancelled";
+  status: "pending" | "running" | "completed" | "failed" | "cancelled" | "paused";
   total_steps: number;
   completed_steps: number;
   failed_steps: number;

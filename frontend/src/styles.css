@@ -359,6 +359,11 @@ code {
   color: #61605b;
 }
 
+.status-pill.paused {
+  background: #fef8eb;
+  color: #b27b12;
+}
+
 .job-details {
   display: grid;
   gap: 6px;

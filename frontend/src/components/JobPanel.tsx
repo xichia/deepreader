@@ -1,6 +1,6 @@
 import { useState } from "react";
 
-import { fetchJobSteps, retryFailedJobSteps, cancelJob } from "../api";
+import { fetchJobSteps, retryFailedJobSteps, cancelJob, pauseJob, resumeJob } from "../api";
 import type { Job, JobStep } from "../types";
 
 type JobPanelProps = {
@@ -16,6 +16,8 @@ function JobPanel({ jobs, isLoading, error, onRefresh }: JobPanelProps) {
   const [loadingStepsJobId, setLoadingStepsJobId] = useState<number | null>(null);
   const [retryingJobId, setRetryingJobId] = useState<number | null>(null);
   const [cancellingJobId, setCancellingJobId] = useState<number | null>(null);
+  const [pausingJobId, setPausingJobId] = useState<number | null>(null);
+  const [resumingJobId, setResumingJobId] = useState<number | null>(null);
   const [detailError, setDetailError] = useState<string | null>(null);
 
   async function toggleJob(job: Job) {
@@ -69,6 +71,32 @@ function JobPanel({ jobs, isLoading, error, onRefresh }: JobPanelProps) {
     }
   }
 
+  async function handlePause(job: Job) {
+    setPausingJobId(job.id);
+    setDetailError(null);
+    try {
+      await pauseJob(job.id);
+      await onRefresh();
+    } catch (jobError) {
+      setDetailError(jobError instanceof Error ? jobError.message : "Unable to pause job.");
+    } finally {
+      setPausingJobId(null);
+    }
+  }
+
+  async function handleResume(job: Job) {
+    setResumingJobId(job.id);
+    setDetailError(null);
+    try {
+      await resumeJob(job.id);
+      await onRefresh();
+    } catch (jobError) {
+      setDetailError(jobError instanceof Error ? jobError.message : "Unable to resume job.");
+    } finally {
+      setResumingJobId(null);
+    }
+  }
+
   return (
     <section className="panel job-panel" aria-labelledby="jobs-heading">
       <div className="panel-header">
@@ -119,6 +147,7 @@ function JobPanel({ jobs, isLoading, error, onRefresh }: JobPanelProps) {
                 <div>
                   <dt>progress</dt>
                   <dd>
+                    {job.status === "paused" ? "Paused at " : ""}
                     {numerator}/{denominator}
                     {failed ? `, ${failed} failed` : ""}
                     {` (${percent}%)`}
@@ -156,29 +185,67 @@ function JobPanel({ jobs, isLoading, error, onRefresh }: JobPanelProps) {
                 </div>
               </div>
               <div className="job-actions">
-                <button className="secondary-button" type="button" onClick={() => void toggleJob(job)}>
-                  {isExpanded ? "Hide steps" : "Show steps"}
-                </button>
-                {job.failed_steps > 0 ? (
-                  <button
-                    className="secondary-button"
-                    type="button"
-                    onClick={() => void handleRetry(job)}
-                    disabled={retryingJobId === job.id}
-                  >
-                    {retryingJobId === job.id ? "Retrying" : "Retry failed"}
-                  </button>
-                ) : null}
-                {["pending", "accepted", "running"].includes(job.status) || ["pending", "accepted", "running"].includes(job.remote_status ?? "") ? (
-                  <button
-                    className="secondary-button"
-                    type="button"
-                    onClick={() => void handleCancel(job)}
-                    disabled={cancellingJobId === job.id}
-                  >
-                    {cancellingJobId === job.id ? "Cancelling" : "Cancel"}
-                  </button>
-                ) : null}
+                {(() => {
+                  const isActionInFlight =
+                    cancellingJobId === job.id ||
+                    pausingJobId === job.id ||
+                    resumingJobId === job.id ||
+                    retryingJobId === job.id;
+
+                  return (
+                    <>
+                      <button
+                        className="secondary-button"
+                        type="button"
+                        onClick={() => void toggleJob(job)}
+                        disabled={isActionInFlight}
+                      >
+                        {isExpanded ? "Hide steps" : "Show steps"}
+                      </button>
+                      {job.failed_steps > 0 ? (
+                        <button
+                          className="secondary-button"
+                          type="button"
+                          onClick={() => void handleRetry(job)}
+                          disabled={isActionInFlight}
+                        >
+                          {retryingJobId === job.id ? "Retrying" : "Retry failed"}
+                        </button>
+                      ) : null}
+                      {job.remote_job_id && job.status === "running" ? (
+                        <button
+                          className="secondary-button"
+                          type="button"
+                          onClick={() => void handlePause(job)}
+                          disabled={isActionInFlight}
+                        >
+                          {pausingJobId === job.id ? "Pausing" : "Pause"}
+                        </button>
+                      ) : null}
+                      {job.remote_job_id && job.status === "paused" ? (
+                        <button
+                          className="secondary-button"
+                          type="button"
+                          onClick={() => void handleResume(job)}
+                          disabled={isActionInFlight}
+                        >
+                          {resumingJobId === job.id ? "Resuming" : "Resume"}
+                        </button>
+                      ) : null}
+                      {["pending", "accepted", "running", "paused"].includes(job.status) ||
+                      ["pending", "accepted", "running", "paused"].includes(job.remote_status ?? "") ? (
+                        <button
+                          className="secondary-button"
+                          type="button"
+                          onClick={() => void handleCancel(job)}
+                          disabled={isActionInFlight}
+                        >
+                          {cancellingJobId === job.id ? "Cancelling" : "Cancel"}
+                        </button>
+                      ) : null}
+                    </>
+                  );
+                })()}
               </div>
               {job.error_message ? <p className="error-message compact">{job.error_message}</p> : null}
               {isExpanded ? (

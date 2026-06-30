@@ -76,6 +76,46 @@ function App() {
   }, []);
 
   useEffect(() => {
+    const hasActiveJob = jobs.some((job) =>
+      ["pending", "running", "paused", "accepted"].includes(job.status)
+    );
+
+    if (!hasActiveJob) {
+      return;
+    }
+
+    const interval = setInterval(async () => {
+      try {
+        const nextJobs = await fetchJobs();
+        setJobs(nextJobs);
+
+        if (selectedDocumentId !== null) {
+          const wasActiveBefore = jobs.some((job) =>
+            job.document_id === selectedDocumentId &&
+            ["pending", "running", "paused", "accepted"].includes(job.status)
+          );
+          const isActiveNow = nextJobs.some((job) =>
+            job.document_id === selectedDocumentId &&
+            ["pending", "running", "paused", "accepted"].includes(job.status)
+          );
+          if (wasActiveBefore && !isActiveNow) {
+            const [nextRecords, nextSummaries] = await Promise.all([
+              fetchDocumentRecords(selectedDocumentId),
+              fetchDocumentSummaries(selectedDocumentId),
+            ]);
+            setRecords(nextRecords);
+            setSummaries(nextSummaries);
+          }
+        }
+      } catch (error) {
+        console.error("Failed to poll jobs:", error);
+      }
+    }, 4000);
+
+    return () => clearInterval(interval);
+  }, [jobs, selectedDocumentId]);
+
+  useEffect(() => {
     if (selectedDocumentId === null) {
       setRecords([]);
       setSummaries([]);

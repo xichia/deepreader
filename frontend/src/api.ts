@@ -95,6 +95,18 @@ export function cancelJob(jobId: number): Promise<Job> {
   });
 }
 
+export function pauseJob(jobId: number): Promise<Job> {
+  return requestJson<Job>(`/jobs/${jobId}/pause`, {
+    method: "POST",
+  });
+}
+
+export function resumeJob(jobId: number): Promise<Job> {
+  return requestJson<Job>(`/jobs/${jobId}/resume`, {
+    method: "POST",
+  });
+}
+
 export function runSearch(request: SearchRequest): Promise<SearchResponse> {
   return requestJson<SearchResponse>("/search", {
     method: "POST",
