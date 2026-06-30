@@ -643,3 +643,36 @@ async def test_adaptive_rpm_streak_updates_diagnostics(monkeypatch):
     assert job.stats["provider_current_rpm_by_alias"]["gemini_01"] == 11
     assert job.stats["provider_success_streak_by_alias"]["gemini_01"] == 0
     assert job.stats["provider_adaptive_adjustments_by_alias"]["gemini_01"] == 1
+
+
+def test_gemini_summary_item_status_validation():
+    from pydantic import ValidationError
+    from app.providers.gemini import GeminiSummaryItem
+
+    # Valid statuses
+    for status in ("completed", "skipped", "failed"):
+        item = GeminiSummaryItem(
+            record_id="r1",
+            source_hash="hash1",
+            summary_text="A good summary.",
+            status=status,
+        )
+        assert item.status == status
+
+    # Invalid status should raise ValidationError
+    with pytest.raises(ValidationError):
+        GeminiSummaryItem(
+            record_id="r1",
+            source_hash="hash1",
+            summary_text="A good summary.",
+            status="success",
+        )
+
+
+def test_gemini_provider_build_prompt_includes_status_rules():
+    from app.providers.gemini import GeminiProvider
+    from app.records.schema import InputRecord
+
+    records = [InputRecord(record_id="r1", text="text", source_hash="hash1")]
+    prompt = GeminiProvider._build_prompt(records)
+    assert 'status must be exactly one of "completed", "skipped", or "failed"; use "completed" for successful summaries.' in prompt

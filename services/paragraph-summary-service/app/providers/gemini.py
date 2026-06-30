@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from datetime import datetime, timezone
 import json
-from typing import Any
+from typing import Any, Literal
 
 from pydantic import BaseModel, ValidationError
 
@@ -28,7 +28,7 @@ class GeminiSummaryItem(BaseModel):
     record_id: str
     source_hash: str
     summary_text: str
-    status: str
+    status: Literal["completed", "skipped", "failed"]
 
 
 class GeminiSummaryPayload(BaseModel):
@@ -137,6 +137,7 @@ Rules:
 - do not omit records
 - do not invent record IDs
 - copy record_id and source_hash exactly
+- status must be exactly one of "completed", "skipped", or "failed"; use "completed" for successful summaries.
 - if the paragraph is empty or unreadable, return status="skipped" and a short empty/unreadable message
 """
         return f"{rules}\nInput records:\n{json.dumps(input_payload, ensure_ascii=False)}"
