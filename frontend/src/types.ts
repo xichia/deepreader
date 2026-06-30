@@ -68,6 +68,13 @@ export type Job = {
   updated_at: string;
   finished_at: string | null;
   steps: JobStep[];
+  remote_job_id?: string | null;
+  remote_status?: string | null;
+  remote_completed_records?: number | null;
+  remote_failed_records?: number | null;
+  remote_total_records?: number | null;
+  remote_stats?: Record<string, unknown>;
+  remote_error?: string | null;
 };
 
 export type SearchRequest = {

@@ -78,6 +78,15 @@ function JobPanel({ jobs, isLoading, error, onRefresh }: JobPanelProps) {
         {jobs.map((job) => {
           const isExpanded = expandedJobId === job.id;
           const steps = stepsByJobId[job.id] ?? job.steps;
+
+          const isRemote = job.remote_total_records !== undefined && job.remote_total_records !== null && job.remote_total_records > 0;
+          const numerator = isRemote ? (job.remote_completed_records ?? 0) : job.completed_steps;
+          const denominator = isRemote ? (job.remote_total_records ?? 0) : job.total_steps;
+          const failed = isRemote ? (job.remote_failed_records ?? 0) : job.failed_steps;
+
+          const rawPercent = denominator > 0 ? (numerator / denominator) * 100 : 0;
+          const percent = Math.min(Math.max(Math.round(rawPercent), 0), 100);
+
           return (
             <article className="job-row" key={job.id}>
               <div className="job-row-header">
@@ -96,8 +105,9 @@ function JobPanel({ jobs, isLoading, error, onRefresh }: JobPanelProps) {
                 <div>
                   <dt>progress</dt>
                   <dd>
-                    {job.completed_steps}/{job.total_steps}
-                    {job.failed_steps ? `, ${job.failed_steps} failed` : ""}
+                    {numerator}/{denominator}
+                    {failed ? `, ${failed} failed` : ""}
+                    {` (${percent}%)`}
                   </dd>
                 </div>
                 <div>
@@ -105,6 +115,32 @@ function JobPanel({ jobs, isLoading, error, onRefresh }: JobPanelProps) {
                   <dd>{job.finished_at ? formatDate(job.finished_at) : "not finished"}</dd>
                 </div>
               </dl>
+              <div className="job-progress-container" style={{ margin: "8px 0" }}>
+                <div
+                  className="job-progress-bar-bg"
+                  style={{
+                    width: "100%",
+                    height: "8px",
+                    background: "#ece8df",
+                    borderRadius: "4px",
+                    overflow: "hidden"
+                  }}
+                >
+                  <div
+                    className="job-progress-bar-fill"
+                    role="progressbar"
+                    aria-valuemin={0}
+                    aria-valuemax={100}
+                    aria-valuenow={percent}
+                    style={{
+                      width: `${percent}%`,
+                      height: "100%",
+                      background: failed > 0 ? "#cc4444" : "#449944",
+                      transition: "width 0.3s ease"
+                    }}
+                  />
+                </div>
+              </div>
               <div className="job-actions">
                 <button className="secondary-button" type="button" onClick={() => void toggleJob(job)}>
                   {isExpanded ? "Hide steps" : "Show steps"}
