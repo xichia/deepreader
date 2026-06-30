@@ -86,3 +86,27 @@ def test_list_jobs_returns_compact_observable_statuses():
     assert jobs[0]["updated_at"]
     assert "artifact_lines" not in jobs[0]
     assert "records" not in jobs[0]
+
+
+def test_cancel_active_job():
+    JOBS.clear()
+    from app.scheduler.dispatcher import JobState
+    job = JobState("mock-job-id", "test_doc", 2)
+    job.status = "running"
+    JOBS["mock-job-id"] = job
+
+    # Cancel it
+    cancel_res = client.post("/jobs/mock-job-id/cancel")
+    assert cancel_res.status_code == 200
+    assert cancel_res.json()["status"] == "cancelled"
+    assert JOBS["mock-job-id"].status == "cancelled"
+
+    # Verify idempotency
+    cancel_res_again = client.post("/jobs/mock-job-id/cancel")
+    assert cancel_res_again.status_code == 200
+    assert cancel_res_again.json()["status"] == "cancelled"
+
+
+def test_cancel_non_existent_job_fails():
+    response = client.post("/jobs/non-existent-id/cancel")
+    assert response.status_code == 404

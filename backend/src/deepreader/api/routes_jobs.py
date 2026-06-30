@@ -138,6 +138,39 @@ def retry_failed_job_steps(job_id: int, session: Session = Depends(get_session))
     return job_out(job)
 
 
+@router.post("/{job_id}/cancel", response_model=JobOut)
+def cancel_job_endpoint(job_id: int, session: Session = Depends(get_session)) -> JobOut:
+    job = get_job(session, job_id)
+    if job is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job not found.")
+
+    if job.status in {"pending", "running"}:
+        if job.remote_job_id:
+            from deepreader.summarise.remote_client import RemoteSummaryClient
+            try:
+                client = RemoteSummaryClient()
+                client.cancel_job(job.remote_job_id)
+            except Exception as exc:
+                import logging
+                logging.getLogger(__name__).warning("Failed to cancel remote job: %s", exc)
+
+        from deepreader.storage.repositories import utc_now
+        job.status = "cancelled"
+        job.finished_at = utc_now()
+        job.updated_at = utc_now()
+
+        for step in job.steps:
+            if step.status in {"pending", "running"}:
+                step.status = "failed"
+                step.error_message = "Job was cancelled."
+                step.finished_at = utc_now()
+                step.updated_at = utc_now()
+
+        session.commit()
+
+    return job_out(job)
+
+
 def _target_stable_ids(job: Job) -> dict[int, str]:
     if job.document is None:
         return {}

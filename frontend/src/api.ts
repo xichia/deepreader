@@ -89,6 +89,12 @@ export function retryFailedJobSteps(jobId: number): Promise<Job> {
   });
 }
 
+export function cancelJob(jobId: number): Promise<Job> {
+  return requestJson<Job>(`/jobs/${jobId}/cancel`, {
+    method: "POST",
+  });
+}
+
 export function runSearch(request: SearchRequest): Promise<SearchResponse> {
   return requestJson<SearchResponse>("/search", {
     method: "POST",

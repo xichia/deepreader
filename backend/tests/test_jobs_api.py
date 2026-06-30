@@ -165,3 +165,40 @@ def test_jobs_api_retries_failed_summary_steps(client: TestClient, examples_dir:
     retried_step = [step for step in retried_job["steps"] if step["error_message"] is None][0]
     assert retried_step["status"] == "completed"
     assert retried_step["attempt_count"] == first_attempt_count + 1
+
+
+def test_jobs_api_cancels_active_job(client: TestClient, examples_dir: Path, monkeypatch) -> None:
+    source_path = examples_dir / "simple_manual.txt"
+    ingest_response = client.post(
+        "/documents/ingest/text",
+        files={"file": (source_path.name, source_path.read_bytes(), "text/plain")},
+    )
+    document_id = ingest_response.json()["document"]["id"]
+    job_payload = client.post(f"/documents/{document_id}/summaries/run").json()
+
+    # Manually mark the job status as running to simulate in-progress
+    with client.app.state.SessionLocal() as session:
+        job = get_job(session, job_payload["id"])
+        assert job is not None
+        job.status = "running"
+        job.remote_job_id = "mock-remote-id"
+        session.commit()
+
+    # Mock the remote summary client's cancel call
+    remote_cancel_calls = []
+    class MockRemoteClient:
+        def __init__(self):
+            pass
+        def cancel_job(self, remote_job_id: str):
+            remote_cancel_calls.append(remote_job_id)
+            return {"job_id": remote_job_id, "status": "cancelled"}
+
+    from deepreader.summarise import remote_client
+    monkeypatch.setattr(remote_client, "RemoteSummaryClient", MockRemoteClient)
+
+    cancel_response = client.post(f"/jobs/{job_payload['id']}/cancel")
+
+    assert cancel_response.status_code == 200
+    payload = cancel_response.json()
+    assert payload["status"] == "cancelled"
+    assert remote_cancel_calls == ["mock-remote-id"]

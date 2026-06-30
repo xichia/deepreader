@@ -46,3 +46,13 @@ class RemoteSummaryClient:
         except Exception as exc:
             LOGGER.error("Failed to fetch remote summary job artifact: %s", exc)
             raise RuntimeError(f"Remote summary service error: {exc}") from exc
+
+    def cancel_job(self, job_id: str) -> dict[str, Any]:
+        """Cancel a remote summary job."""
+        try:
+            response = httpx.post(f"{self.base_url}/jobs/{job_id}/cancel")
+            response.raise_for_status()
+            return response.json()
+        except Exception as exc:
+            LOGGER.error("Failed to cancel remote summary job: %s", exc)
+            raise RuntimeError(f"Remote summary service error: {exc}") from exc

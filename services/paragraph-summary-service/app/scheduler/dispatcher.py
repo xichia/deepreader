@@ -1112,12 +1112,13 @@ async def _run_job_background(job: JobState, request: SummaryRequest) -> None:
         except asyncio.QueueEmpty:
             break
 
-    processed_records = job.completed_records + job.failed_records
-    job.status = (
-        "completed"
-        if job.failed_records == 0 and processed_records == job.total_records
-        else "failed"
-    )
+    if job.status != "cancelled":
+        processed_records = job.completed_records + job.failed_records
+        job.status = (
+            "completed"
+            if job.failed_records == 0 and processed_records == job.total_records
+            else "failed"
+        )
     if job.status == "failed" and job.error is None:
         first_failure = next(
             (line for line in job.artifact_lines if line.status == "failed"),

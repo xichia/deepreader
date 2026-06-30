@@ -354,6 +354,11 @@ code {
   color: #1f5f55;
 }
 
+.status-pill.cancelled {
+  background: #f1f0eb;
+  color: #61605b;
+}
+
 .job-details {
   display: grid;
   gap: 6px;

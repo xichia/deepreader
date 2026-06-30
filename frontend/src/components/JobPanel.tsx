@@ -1,6 +1,6 @@
 import { useState } from "react";
 
-import { fetchJobSteps, retryFailedJobSteps } from "../api";
+import { fetchJobSteps, retryFailedJobSteps, cancelJob } from "../api";
 import type { Job, JobStep } from "../types";
 
 type JobPanelProps = {
@@ -15,6 +15,7 @@ function JobPanel({ jobs, isLoading, error, onRefresh }: JobPanelProps) {
   const [stepsByJobId, setStepsByJobId] = useState<Record<number, JobStep[]>>({});
   const [loadingStepsJobId, setLoadingStepsJobId] = useState<number | null>(null);
   const [retryingJobId, setRetryingJobId] = useState<number | null>(null);
+  const [cancellingJobId, setCancellingJobId] = useState<number | null>(null);
   const [detailError, setDetailError] = useState<string | null>(null);
 
   async function toggleJob(job: Job) {
@@ -52,6 +53,19 @@ function JobPanel({ jobs, isLoading, error, onRefresh }: JobPanelProps) {
       setDetailError(jobError instanceof Error ? jobError.message : "Unable to retry failed steps.");
     } finally {
       setRetryingJobId(null);
+    }
+  }
+
+  async function handleCancel(job: Job) {
+    setCancellingJobId(job.id);
+    setDetailError(null);
+    try {
+      await cancelJob(job.id);
+      await onRefresh();
+    } catch (jobError) {
+      setDetailError(jobError instanceof Error ? jobError.message : "Unable to cancel job.");
+    } finally {
+      setCancellingJobId(null);
     }
   }
 
@@ -153,6 +167,16 @@ function JobPanel({ jobs, isLoading, error, onRefresh }: JobPanelProps) {
                     disabled={retryingJobId === job.id}
                   >
                     {retryingJobId === job.id ? "Retrying" : "Retry failed"}
+                  </button>
+                ) : null}
+                {["pending", "accepted", "running"].includes(job.status) || ["pending", "accepted", "running"].includes(job.remote_status ?? "") ? (
+                  <button
+                    className="secondary-button"
+                    type="button"
+                    onClick={() => void handleCancel(job)}
+                    disabled={cancellingJobId === job.id}
+                  >
+                    {cancellingJobId === job.id ? "Cancelling" : "Cancel"}
                   </button>
                 ) : null}
               </div>

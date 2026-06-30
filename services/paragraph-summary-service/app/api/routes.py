@@ -89,6 +89,16 @@ def read_job_artifact(job_id: str):
     # The backend consumes the artifact as a JSON array of line-shaped objects.
     return [line.model_dump() for line in job.artifact_lines]
 
+@router.post("/jobs/{job_id}/cancel", response_model=JobStatusResponse)
+def cancel_job(job_id: str):
+    job = get_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+    if job.status in {"pending", "running", "accepted"}:
+        job.status = "cancelled"
+        job.touch()
+    return job_status_response(job)
+
 @router.get("/health")
 def health_check():
     from app.config import settings
