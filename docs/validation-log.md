@@ -249,13 +249,114 @@ Validated:
 - Added bounded OpenStax validation workflow documentation at `docs/validation-workflows.md`.
 - Both Gemini batch escalation and OpenStax validation remain manual/deferred to protect API quota, and were not run.
 
+## 2026-06-30 — Synthetic Gemini hard-profile batch tuning
+
+Validated:
+- The documented batch tuning results came from manual live Gemini canary/tuning runs (requiring uvicorn service to be started and live provider/API calls made from the native terminal).
+- The documentation update itself was docs-only.
+- OpenStax was not used.
+- Persistent defaults were not changed.
+- No secrets were printed or committed.
+- provider: gemini
+- model: gemini-3.1-flash-lite
+- synthetic records only
+- profile: textbook-hard
+- dense synthetic textbook-like prose with equations, cross references, caveats, and worked-example style sentences
+- no 429s observed
+
+Tuning Results:
+
+1. Default token budget behavior:
+Config:
+- SUMMARY_BATCH_TARGET_TOKENS=2000
+- SUMMARY_BATCH_HARD_MAX_TOKENS=3000
+- SUMMARY_BATCH_RESERVED_OUTPUT_TOKENS=1000
+- SUMMARY_MAX_PROVIDER_CALLS_PER_JOB=1
+
+Result:
+- 4 records × ~180 words: PASS
+- 5 records × ~180 words: failed because token batcher split and provider call cap was exhausted
+- finding: default token budget limits hard textbook-like records to roughly 4 records per provider call
+
+2. Raised token budget, batch size 12:
+Config:
+- SUMMARY_BATCH_MAX_RECORDS=12
+- SUMMARY_BATCH_TARGET_TOKENS=6000
+- SUMMARY_BATCH_HARD_MAX_TOKENS=8000
+- SUMMARY_BATCH_RESERVED_OUTPUT_TOKENS=2000
+- SUMMARY_MAX_PROVIDER_CALLS_PER_JOB=1
+
+Result:
+- 8 records × ~180 words: PASS
+- 10 records × ~180 words: PASS
+- 12 records × ~180 words: PASS
+- finding: Gemini handled 12 hard synthetic records in one provider call when token budget allowed it
+
+3. Raised token budget, batch size 24:
+Config:
+- SUMMARY_BATCH_MAX_RECORDS=24
+- SUMMARY_BATCH_TARGET_TOKENS=10000
+- SUMMARY_BATCH_HARD_MAX_TOKENS=14000
+- SUMMARY_BATCH_RESERVED_OUTPUT_TOKENS=3500
+- SUMMARY_MAX_PROVIDER_CALLS_PER_JOB=1
+
+Result:
+- 16 records × ~180 words: PASS
+- 20 records × ~180 words: PASS
+- 24 records × ~180 words: PASS
+
+4. 240-word hard profile boundary:
+Config:
+- SUMMARY_BATCH_MAX_RECORDS=24
+- SUMMARY_BATCH_TARGET_TOKENS=12000
+- SUMMARY_BATCH_HARD_MAX_TOKENS=16000
+- SUMMARY_BATCH_RESERVED_OUTPUT_TOKENS=4000
+
+Results:
+- With provider cap 1:
+  - 20 records × ~240 words: PASS
+  - 22 records × ~240 words: failed/retried; max provider call cap exhausted
+- With provider cap 2:
+  - 22 records × ~240 words: PASS
+  - 24 records × ~240 words: PASS
+
+5. Higher headroom run:
+Config:
+- SUMMARY_BATCH_MAX_RECORDS=32
+- SUMMARY_BATCH_TARGET_TOKENS=16000
+- SUMMARY_BATCH_HARD_MAX_TOKENS=22000
+- SUMMARY_BATCH_RESERVED_OUTPUT_TOKENS=6000
+- SUMMARY_MAX_PROVIDER_CALLS_PER_JOB=2
+
+Results:
+- 26 records × ~240 words: PASS, provider_calls_attempted 1
+- 28 records × ~240 words: PASS, provider_calls_attempted 1
+- 30 records × ~240 words: PASS, provider_calls_attempted 1
+- 32 records × ~240 words: PASS, provider_calls_attempted 2
+- finding: one-call hard-profile ceiling appears around 30 records / ~7200 synthetic words under this config; 32 is retry/cap-2 headroom, not recommended default
+
+Recommendations:
+- Balanced production candidate:
+  SUMMARY_BATCH_MAX_RECORDS=16
+  SUMMARY_BATCH_TARGET_TOKENS=10000
+  SUMMARY_BATCH_HARD_MAX_TOKENS=14000
+  SUMMARY_BATCH_RESERVED_OUTPUT_TOKENS=3500
+- Aggressive validation candidate:
+  SUMMARY_BATCH_MAX_RECORDS=24
+  SUMMARY_BATCH_TARGET_TOKENS=12000
+  SUMMARY_BATCH_HARD_MAX_TOKENS=16000
+  SUMMARY_BATCH_RESERVED_OUTPUT_TOKENS=4000
+- Do not default to 32 yet.
+- Persistent defaults were not changed.
+- OpenStax remains deferred.
+
 ## Current validated state
 
 - Backend pause/resume proxy implemented and tested.
 - Frontend pause/resume controls implemented and built.
 - Full mock lifecycle smoke passed through backend and paragraph-summary-service.
 - OpenStax remains intentionally deferred.
-- Gemini live validation remains tiny-canary only.
+- Gemini live validation includes tiny-canary and synthetic textbook-hard batch tuning up to size 32.
 
 ## Remaining gaps
 

@@ -3,16 +3,27 @@
 ## 1. Gemini Batch-Size Escalation Plan
 
 To optimize provider API usage and verify scaling boundaries:
-* **Current Validated State**: Live runs have been validated using a batch size of `5` (`SUMMARY_BATCH_MAX_RECORDS=5`).
-* **Future Candidate Batch Size 10**:
-  * Run with provider call cap set to `2` (`SUMMARY_MAX_PROVIDER_CALLS_PER_JOB=2`).
-  * Execute via inline env overrides only.
-* **Future Candidate Batch Size 12**:
-  * Run with provider call cap set to `1` (`SUMMARY_MAX_PROVIDER_CALLS_PER_JOB=1`).
-  * Execute via inline env overrides only.
+* **Current Validated State**:
+  * Live runs validated using a batch size of `5` (`SUMMARY_BATCH_MAX_RECORDS=5`).
+  * Synthetic Gemini hard-profile batch tuning completed manually against `gemini-3.1-flash-lite` using synthetic `textbook-hard` records (dense prose, equations, cross-references, caveats, examples). The documented batch tuning results came from manual live Gemini canary/tuning runs (requiring uvicorn and live provider/API calls from the native terminal). The documentation update itself was docs-only. OpenStax was not used, persistent defaults were not changed, and no secrets were printed or committed.
+  * Validated configurations up to:
+    * 30 records × ~240 words in one provider call (`SUMMARY_BATCH_MAX_RECORDS=32`, cap 2, attempted 1 call).
+    * 32 records × ~240 words with cap 2 (attempted 2 calls, completed successfully).
+* **Recommended Configurations**:
+  * **Balanced Production Candidate**:
+    * `SUMMARY_BATCH_MAX_RECORDS=16`
+    * `SUMMARY_BATCH_TARGET_TOKENS=10000`
+    * `SUMMARY_BATCH_HARD_MAX_TOKENS=14000`
+    * `SUMMARY_BATCH_RESERVED_OUTPUT_TOKENS=3500`
+  * **Aggressive Validation Candidate**:
+    * `SUMMARY_BATCH_MAX_RECORDS=24`
+    * `SUMMARY_BATCH_TARGET_TOKENS=12000`
+    * `SUMMARY_BATCH_HARD_MAX_TOKENS=16000`
+    * `SUMMARY_BATCH_RESERVED_OUTPUT_TOKENS=4000`
 * **Constraints**:
-  * Do not modify persistent defaults or configuration files yet.
-  * Do not use OpenStax documents for initial batch-size escalation; use small, safe synthetic sets only.
+  * Persistent defaults and configuration files were not changed.
+  * Do not default to 32 yet.
+  * OpenStax remains deferred.
 
 ## 2. Pause/Resume Roadmap
 
