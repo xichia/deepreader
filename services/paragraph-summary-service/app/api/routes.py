@@ -94,10 +94,45 @@ def cancel_job(job_id: str):
     job = get_job(job_id)
     if not job:
         raise HTTPException(status_code=404, detail="Job not found")
-    if job.status in {"pending", "running", "accepted"}:
+    if job.status in {"pending", "running", "accepted", "paused"}:
         job.status = "cancelled"
+        job._run_gate.set()
         job.touch()
     return job_status_response(job)
+
+@router.post("/jobs/{job_id}/pause", response_model=JobStatusResponse)
+def pause_job(job_id: str):
+    job = get_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    if job.status == "paused":
+        return job_status_response(job)
+
+    if job.status in {"pending", "running", "accepted"}:
+        job.status = "paused"
+        job._run_gate.clear()
+        job.touch()
+        return job_status_response(job)
+
+    raise HTTPException(status_code=409, detail=f"Cannot pause job in terminal state: {job.status}")
+
+@router.post("/jobs/{job_id}/resume", response_model=JobStatusResponse)
+def resume_job(job_id: str):
+    job = get_job(job_id)
+    if not job:
+        raise HTTPException(status_code=404, detail="Job not found")
+
+    if job.status == "running":
+        return job_status_response(job)
+
+    if job.status == "paused":
+        job.status = "running"
+        job._run_gate.set()
+        job.touch()
+        return job_status_response(job)
+
+    raise HTTPException(status_code=409, detail=f"Cannot resume job from state: {job.status}")
 
 @router.get("/health")
 def health_check():

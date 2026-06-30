@@ -202,6 +202,8 @@ class JobState:
             "effective_config": settings.safe_summary(),
         }
         self._provider_call_lock = asyncio.Lock()
+        self._run_gate = asyncio.Event()
+        self._run_gate.set()
 
     def touch(self) -> None:
         self.updated_at = datetime.now(timezone.utc).isoformat()
@@ -1036,14 +1038,19 @@ async def _run_job_background(job: JobState, request: SummaryRequest) -> None:
         return None
 
     async def worker() -> None:
-        while not batch_queue.empty() and job.status == "running":
+        while not batch_queue.empty() and job.status not in {"completed", "failed", "cancelled"}:
+            await job._run_gate.wait()
+            if job.status in {"completed", "failed", "cancelled"}:
+                break
+
             try:
                 batch, ordinary_attempts, rate_limit_attempts = await batch_queue.get()
             except asyncio.CancelledError:
                 break
 
-            lane = await acquire_best_lane()
-            if lanes and lane is None:
+            # Wait if paused while getting
+            await job._run_gate.wait()
+            if job.status in {"completed", "failed", "cancelled"}:
                 batch_queue.task_done()
                 if job.status == "cancelled":
                     _append_cancelled_records(job, batch, request.summary_style)
@@ -1060,7 +1067,33 @@ async def _run_job_background(job: JobState, request: SummaryRequest) -> None:
                         request.summary_style,
                         failures={record.record_id: detail for record in batch},
                     )
-                continue
+                break
+
+            lane = await acquire_best_lane()
+            if lanes and lane is None:
+                if job.status == "paused":
+                    await job._run_gate.wait()
+                    if job.status == "running":
+                        lane = await acquire_best_lane()
+
+                if lane is None:
+                    batch_queue.task_done()
+                    if job.status == "cancelled":
+                        _append_cancelled_records(job, batch, request.summary_style)
+                    elif job.status != "paused":
+                        detail = FailureDetail(
+                            error_code="job_stopped",
+                            message="Job was stopped or cancelled",
+                            attempt_count=ordinary_attempts + rate_limit_attempts,
+                            retry_count=ordinary_attempts + rate_limit_attempts,
+                        )
+                        _append_failed_records(
+                            job,
+                            batch,
+                            request.summary_style,
+                            failures={record.record_id: detail for record in batch},
+                        )
+                    continue
 
             lane_id = lane.lane_id if lane is not None else "default"
             provider_alias = lane.provider_alias if lane is not None else "default"
