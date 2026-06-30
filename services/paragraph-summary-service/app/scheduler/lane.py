@@ -1,4 +1,5 @@
 import asyncio
+from collections import deque
 from contextlib import asynccontextmanager
 import random
 import time
@@ -47,11 +48,16 @@ class QuotaLane:
         self.rate_limit_cooldown_seconds = max(0.0, rate_limit_cooldown_seconds) * time_scale
         self.retry_backoff_base_seconds = max(0.0, retry_backoff_base_seconds) * time_scale
         self.jitter_ratio = max(0.0, jitter_ratio)
+        self.window_seconds = 60.0 * self.time_scale
+        self.dispatch_history: deque[float] = deque()
         self.last_dispatch_time: float | None = None
+        self.stagger_until: float | None = None
         self.cooldown_until: float | None = None
         self.cooldown_reason: str | None = None
+        self.rate_limit_streak = 0
         self.max_in_flight = 1
         self._in_flight = asyncio.Semaphore(self.max_in_flight)
+        self._reserved = False
 
     def _set_current_rpm(self, rpm: int) -> None:
         self.current_rpm = max(1, rpm)
@@ -63,6 +69,7 @@ class QuotaLane:
 
         Returns True if RPM changed.
         """
+        self.rate_limit_streak = 0
         if not self.adaptive_rpm_enabled:
             return False
         self.success_streak += 1
@@ -79,6 +86,7 @@ class QuotaLane:
         Returns True if RPM changed.
         """
         self.success_streak = 0
+        self.rate_limit_streak += 1
         if not self.adaptive_rpm_enabled:
             return False
         new_rpm = max(self.base_rpm, int(self.current_rpm * self.adaptive_rpm_backoff_factor))
@@ -101,7 +109,30 @@ class QuotaLane:
         """Limit a provider identity to one in-flight request."""
 
         async with self._in_flight:
+            self._reserved = False
             yield
+
+    def set_initial_stagger(self, start_time: float, offset_seconds: float) -> None:
+        """Delay this lane's first dispatch by a deterministic scheduler offset."""
+
+        offset = max(0.0, offset_seconds)
+        self.stagger_until = start_time + offset if offset else None
+
+    def reserve(self, now: float) -> bool:
+        """Reserve an available lane until its provider-call slot is entered."""
+
+        if (
+            not self.enabled
+            or self._reserved
+            or self._in_flight.locked()
+            or self.get_available_at(now) > now
+        ):
+            return False
+        self._reserved = True
+        return True
+
+    def release_reservation(self) -> None:
+        self._reserved = False
 
     def defer_after_rate_limit(
         self,
@@ -144,29 +175,77 @@ class QuotaLane:
         )
 
     def is_in_flight(self) -> bool:
-        return self._in_flight.locked()
+        return self._reserved or self._in_flight.locked()
+
+    def _prune_dispatch_history(self, now: float) -> None:
+        cutoff = now - self.window_seconds
+        while self.dispatch_history and self.dispatch_history[0] <= cutoff:
+            self.dispatch_history.popleft()
+
+    def get_request_count_in_window(self, now: float) -> int:
+        self._prune_dispatch_history(now)
+        return len(self.dispatch_history)
+
+    def _get_rolling_window_available_at(self, now: float) -> float:
+        self._prune_dispatch_history(now)
+        if len(self.dispatch_history) < self.current_rpm:
+            return now
+
+        # If adaptive RPM has fallen below the number of recent attempts, enough
+        # of the oldest requests must expire to leave room under the new limit.
+        limiting_index = len(self.dispatch_history) - self.current_rpm
+        return self.dispatch_history[limiting_index] + self.window_seconds
 
     def get_available_at(self, now: float) -> float:
-        rpm_ready_at = (
+        interval_ready_at = (
             self.last_dispatch_time + self.interval
             if self.last_dispatch_time is not None
             else now
         )
-        return max(rpm_ready_at, self.cooldown_until or now)
+        rolling_ready_at = self._get_rolling_window_available_at(now)
+        return max(
+            interval_ready_at,
+            rolling_ready_at,
+            self.stagger_until or now,
+            self.cooldown_until or now,
+        )
 
     def get_unavailability_reason(self, now: float) -> str:
-        if self._in_flight.locked():
+        if not self.enabled:
+            return "disabled"
+        if self.is_in_flight():
             return "in_flight"
         if self.cooldown_until is not None and self.cooldown_until > now:
             return "provider_cooldown"
-        rpm_ready_at = (
+        if self.stagger_until is not None and self.stagger_until > now:
+            return "lane_stagger"
+        interval_ready_at = (
             self.last_dispatch_time + self.interval
             if self.last_dispatch_time is not None
             else now
         )
-        if rpm_ready_at > now:
+        if max(interval_ready_at, self._get_rolling_window_available_at(now)) > now:
             return "rpm_window"
         return "none"
+
+    def get_availability_diagnostic(
+        self,
+        now: float,
+    ) -> dict[str, int | float | str | bool | None]:
+        """Return safe, per-alias scheduler state without credential material."""
+
+        reason = self.get_unavailability_reason(now)
+        available_at = self.get_available_at(now)
+        return {
+            "available": reason == "none",
+            "reason": reason,
+            "available_in_seconds": (
+                None if reason == "disabled" else round(max(0.0, available_at - now), 6)
+            ),
+            "requests_in_rolling_window": self.get_request_count_in_window(now),
+            "rolling_window_seconds": self.window_seconds,
+            "current_rpm": self.current_rpm,
+        }
 
     async def wait_for_cooldown(self, get_time=time.monotonic, sleep=asyncio.sleep) -> float:
         if not self.enabled:
@@ -179,8 +258,10 @@ class QuotaLane:
             await sleep(delay)
 
         self.last_dispatch_time = get_time()
+        self.dispatch_history.append(self.last_dispatch_time)
+        if self.stagger_until is not None and self.last_dispatch_time >= self.stagger_until:
+            self.stagger_until = None
         if self.cooldown_until is not None and self.last_dispatch_time >= self.cooldown_until:
             self.cooldown_until = None
             self.cooldown_reason = None
         return delay
-

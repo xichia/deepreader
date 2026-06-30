@@ -1,6 +1,64 @@
 import pytest
 from app.scheduler.lane import QuotaLane
 
+
+def test_rolling_rpm_window_uses_recent_request_attempts():
+    lane = QuotaLane("lane_01", rpm=2, provider_alias="gemini_01")
+    lane.dispatch_history.extend([0.0, 0.1])
+    lane.last_dispatch_time = 0.1
+
+    assert lane.get_request_count_in_window(1.0) == 2
+    assert lane.get_available_at(1.0) == pytest.approx(60.0)
+    assert lane.get_unavailability_reason(1.0) == "rpm_window"
+
+    # The boundary is rolling from each attempt, not a wall-clock minute.
+    assert lane.get_request_count_in_window(60.0) == 1
+    assert lane.get_available_at(60.0) == pytest.approx(60.0)
+
+
+def test_rolling_window_respects_an_adaptive_rpm_reduction():
+    lane = QuotaLane("lane_01", rpm=2)
+    lane.dispatch_history.extend([1.0, 2.0, 3.0, 4.0])
+    lane.last_dispatch_time = 4.0
+
+    # Two old attempts must expire before another request fits under RPM 2.
+    assert lane.get_available_at(10.0) == pytest.approx(63.0)
+
+
+def test_lane_availability_diagnostic_is_safe_and_deterministic():
+    secret = "diagnostic-secret-must-not-leak"
+    lane = QuotaLane(
+        "lane_02",
+        rpm=4,
+        provider_alias="gemini_02",
+        api_key=secret,
+    )
+    lane.set_initial_stagger(100.0, 5.0)
+
+    diagnostic = lane.get_availability_diagnostic(101.0)
+
+    assert diagnostic == {
+        "available": False,
+        "reason": "lane_stagger",
+        "available_in_seconds": 4.0,
+        "requests_in_rolling_window": 0,
+        "rolling_window_seconds": 60.0,
+        "current_rpm": 4,
+    }
+    assert secret not in repr(diagnostic)
+
+
+def test_lane_reservation_prevents_duplicate_scheduler_assignment():
+    lane = QuotaLane("lane_01", rpm=60)
+
+    assert lane.reserve(10.0)
+    assert not lane.reserve(10.0)
+    assert lane.get_unavailability_reason(10.0) == "in_flight"
+
+    lane.release_reservation()
+    assert lane.get_unavailability_reason(10.0) == "none"
+
+
 @pytest.mark.asyncio
 async def test_quota_lane_cooldown():
     lane = QuotaLane("test", rpm=60, time_scale=1.0)
@@ -24,6 +82,7 @@ async def test_quota_lane_cooldown():
 
     assert sleep_calls == [1.0]
     assert lane.last_dispatch_time == 1.0
+    assert list(lane.dispatch_history) == [0.0, 1.0]
 
 
 @pytest.mark.asyncio

@@ -27,6 +27,7 @@ LOGGER = logging.getLogger(__name__)
 
 GEMINI_PROMPT_OVERHEAD_TOKENS = 256
 MAX_RETRIES = 2
+MAX_RATE_LIMIT_RETRIES = 2
 MAX_DIAGNOSTIC_CHARS = 500
 _SECRET_ASSIGNMENT_RE = re.compile(
     r"(?i)\b(api[_-]?key|authorization|credential|password|secret|token|x-goog-api-key)"
@@ -195,6 +196,9 @@ class JobState:
             "provider_current_rpm_by_alias": {},
             "provider_success_streak_by_alias": {},
             "provider_adaptive_adjustments_by_alias": {},
+            "provider_stagger_seconds_by_alias": {},
+            "provider_availability_by_alias": {},
+            "lane_unavailability_reasons": {},
             "effective_config": settings.safe_summary(),
         }
         self._provider_call_lock = asyncio.Lock()
@@ -418,6 +422,35 @@ def _build_lanes_and_providers(
     return lanes, providers
 
 
+def _stagger_lanes_evenly(
+    lanes: list[QuotaLane],
+    start_time: float,
+) -> dict[str, float]:
+    """Apply stable first-dispatch offsets across provider aliases."""
+
+    lane_count = len(lanes)
+    offsets: dict[str, float] = {}
+    for index, lane in enumerate(lanes):
+        offset = (lane.interval / lane_count) * index if lane_count else 0.0
+        lane.set_initial_stagger(start_time, offset)
+        offsets[lane.provider_alias] = offset
+    return offsets
+
+
+def _record_lane_availability(
+    job: JobState,
+    lanes: list[QuotaLane],
+    now: float,
+) -> None:
+    diagnostics = {
+        lane.provider_alias: lane.get_availability_diagnostic(now) for lane in lanes
+    }
+    job.stats["provider_availability_by_alias"] = diagnostics
+    job.stats["lane_unavailability_reasons"] = {
+        alias: diagnostic["reason"] for alias, diagnostic in diagnostics.items()
+    }
+
+
 def _is_reasonable_one_sentence(summary_text: str) -> bool:
     text = summary_text.strip()
     if not text or "\n" in text or re.match(r"^(?:[-*#]|\d+[.)]\s)", text):
@@ -617,7 +650,7 @@ async def _process_batch(
 
             if lane is not None and was_rate_limited:
                 lane.record_rate_limit_response()
-                delay = lane.defer_after_rate_limit(loop_rate_limit_attempt + 1)
+                delay = lane.defer_after_rate_limit(lane.rate_limit_streak)
                 job.record_rate_limit(lane.provider_alias, cooling_down=True)
                 job.record_lane_tuning(lane)
                 LOGGER.warning(
@@ -679,7 +712,7 @@ async def _process_batch(
             if current_batch and lane is not None:
                 if was_rate_limited:
                     lane.record_rate_limit_response()
-                    lane.defer_after_rate_limit(loop_rate_limit_attempt + 1)
+                    lane.defer_after_rate_limit(lane.rate_limit_streak)
                     job.record_rate_limit(lane.provider_alias, cooling_down=True)
                     job.record_lane_tuning(lane)
                 else:
@@ -695,7 +728,7 @@ async def _process_batch(
             if lane is not None:
                 if rate_limited:
                     lane.record_rate_limit_response()
-                    delay = lane.defer_after_rate_limit(loop_rate_limit_attempt + 1)
+                    delay = lane.defer_after_rate_limit(lane.rate_limit_streak)
                     job.record_rate_limit(lane.provider_alias, cooling_down=True)
                     job.record_lane_tuning(lane)
                     loop_rate_limit_attempt += 1
@@ -901,9 +934,12 @@ async def _run_job_background(job: JobState, request: SummaryRequest) -> None:
     job.stats["provider_adaptive_adjustments_by_alias"] = {
         lane.provider_alias: lane.adaptive_adjustment_count for lane in lanes
     }
-    job.stats["lane_unavailability_reasons"] = {
-        lane.provider_alias: "none" for lane in lanes
-    }
+    scheduler_started_at = time.monotonic()
+    job.stats["provider_stagger_seconds_by_alias"] = _stagger_lanes_evenly(
+        lanes,
+        scheduler_started_at,
+    )
+    _record_lane_availability(job, lanes, scheduler_started_at)
 
     batch_queue: asyncio.Queue[tuple[list[InputRecord], int, int]] = asyncio.Queue()
     for batch in batches:
@@ -933,11 +969,8 @@ async def _run_job_background(job: JobState, request: SummaryRequest) -> None:
             return None
         while job.status == "running":
             now = time.monotonic()
-            
-            reasons = {}
-            for lane in lanes:
-                reasons[lane.provider_alias] = lane.get_unavailability_reason(now)
-            job.stats["lane_unavailability_reasons"] = reasons
+
+            _record_lane_availability(job, lanes, now)
 
             best_lane = None
             earliest_time = float("inf")
@@ -948,12 +981,12 @@ async def _run_job_background(job: JobState, request: SummaryRequest) -> None:
                 if lane.is_in_flight():
                     continue
                 avail_at = lane.get_available_at(now)
-                
+
                 last_used = lane.last_dispatch_time or 0.0
                 if avail_at < earliest_time:
                     earliest_time = avail_at
                     best_lane = lane
-                elif abs(avail_at - earliest_time) < 0.001:
+                elif avail_at == earliest_time:
                     if best_lane is None or last_used < (best_lane.last_dispatch_time or 0.0):
                         best_lane = lane
 
@@ -962,7 +995,9 @@ async def _run_job_background(job: JobState, request: SummaryRequest) -> None:
                 continue
 
             if earliest_time <= now:
-                return best_lane
+                if best_lane.reserve(now):
+                    _record_lane_availability(job, lanes, now)
+                    return best_lane
             else:
                 sleep_time = earliest_time - now
                 await asyncio.sleep(min(sleep_time, 0.5))
@@ -1008,7 +1043,8 @@ async def _run_job_background(job: JobState, request: SummaryRequest) -> None:
                     job.touch()
                 else:
                     if was_rate_limited:
-                        if rate_limit_attempts < 10:
+                        if rate_limit_attempts < MAX_RATE_LIMIT_RETRIES:
+                            job.stats["retry_count"] += 1
                             batch_queue.put_nowait((retry_records, ordinary_attempts, rate_limit_attempts + 1))
                         else:
                             LOGGER.error("Exhausted rate limit retries for %s records in job %s", len(retry_records), job.job_id)
@@ -1046,6 +1082,7 @@ async def _run_job_background(job: JobState, request: SummaryRequest) -> None:
                 )
             finally:
                 if lane is not None:
+                    lane.release_reservation()
                     job.provider_batch_finished(lane.provider_alias)
                 batch_queue.task_done()
 
@@ -1094,9 +1131,7 @@ async def _run_job_background(job: JobState, request: SummaryRequest) -> None:
         else:
             job.error = "One or more provider results failed"
 
-    job.stats["lane_unavailability_reasons"] = {
-        lane.provider_alias: "none" for lane in lanes
-    }
+    _record_lane_availability(job, lanes, time.monotonic())
     job.touch()
 
 
