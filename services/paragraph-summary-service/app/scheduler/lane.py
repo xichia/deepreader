@@ -143,17 +143,37 @@ class QuotaLane:
             and self.cooldown_until > get_time()
         )
 
-    async def wait_for_cooldown(self, get_time=time.monotonic, sleep=asyncio.sleep) -> float:
-        if not self.enabled:
-            raise RuntimeError(f"Quota lane {self.lane_id} is disabled")
+    def is_in_flight(self) -> bool:
+        return self._in_flight.locked()
 
-        now = get_time()
+    def get_available_at(self, now: float) -> float:
         rpm_ready_at = (
             self.last_dispatch_time + self.interval
             if self.last_dispatch_time is not None
             else now
         )
-        ready_at = max(rpm_ready_at, self.cooldown_until or now)
+        return max(rpm_ready_at, self.cooldown_until or now)
+
+    def get_unavailability_reason(self, now: float) -> str:
+        if self._in_flight.locked():
+            return "in_flight"
+        if self.cooldown_until is not None and self.cooldown_until > now:
+            return "provider_cooldown"
+        rpm_ready_at = (
+            self.last_dispatch_time + self.interval
+            if self.last_dispatch_time is not None
+            else now
+        )
+        if rpm_ready_at > now:
+            return "rpm_window"
+        return "none"
+
+    async def wait_for_cooldown(self, get_time=time.monotonic, sleep=asyncio.sleep) -> float:
+        if not self.enabled:
+            raise RuntimeError(f"Quota lane {self.lane_id} is disabled")
+
+        now = get_time()
+        ready_at = self.get_available_at(now)
         delay = max(0.0, ready_at - now)
         if delay:
             await sleep(delay)
@@ -163,3 +183,4 @@ class QuotaLane:
             self.cooldown_until = None
             self.cooldown_reason = None
         return delay
+

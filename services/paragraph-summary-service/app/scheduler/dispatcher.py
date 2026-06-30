@@ -8,6 +8,7 @@ from dataclasses import dataclass, field
 from datetime import datetime, timezone
 import logging
 import os
+import time
 import re
 from typing import Any
 
@@ -547,13 +548,18 @@ async def _process_batch(
     summary_style: str,
     max_provider_calls: int | None = None,
     lane: QuotaLane | None = None,
-) -> None:
+    *,
+    attempt: int = 0,
+    rate_limit_attempt: int = 0,
+    single_attempt: bool = False,
+) -> tuple[list[InputRecord], dict[str, FailureDetail], bool] | None:
     current_batch = batch
     last_failures: dict[str, FailureDetail] = {}
+    loop_attempt = attempt
+    loop_rate_limit_attempt = rate_limit_attempt
+    max_rate_limits = MAX_RETRIES
 
-    for attempt in range(MAX_RETRIES + 1):
-        if not current_batch:
-            break
+    while current_batch:
         provider_alias = lane.provider_alias if lane is not None else None
         if not await job.claim_provider_call(max_provider_calls, provider_alias):
             detail = FailureDetail(
@@ -561,10 +567,12 @@ async def _process_batch(
                 message="Configured provider call limit was exhausted before this batch could run",
                 lane_id=lane.lane_id if lane is not None else None,
                 provider_alias=provider_alias,
-                attempt_count=attempt,
-                retry_count=max(attempt - 1, 0),
+                attempt_count=loop_attempt + loop_rate_limit_attempt + 1,
+                retry_count=loop_attempt + loop_rate_limit_attempt,
             )
             last_failures.update({record.record_id: detail for record in current_batch})
+            if single_attempt:
+                return current_batch, last_failures, False
             break
 
         try:
@@ -590,7 +598,7 @@ async def _process_batch(
                                 else 0
                             ),
                         ),
-                        attempt + 1,
+                        loop_attempt + loop_rate_limit_attempt + 1,
                     )
                     results = await provider.summarize_batch(
                         job.document_id,
@@ -604,10 +612,12 @@ async def _process_batch(
                     summary_style,
                 )
         except Exception as exc:
-            detail = _exception_failure(exc, lane=lane, attempt_count=attempt + 1)
-            if lane is not None and detail.error_code == "provider_rate_limited":
+            detail = _exception_failure(exc, lane=lane, attempt_count=loop_attempt + loop_rate_limit_attempt + 1)
+            was_rate_limited = (detail.error_code == "provider_rate_limited")
+
+            if lane is not None and was_rate_limited:
                 lane.record_rate_limit_response()
-                delay = lane.defer_after_rate_limit(attempt + 1)
+                delay = lane.defer_after_rate_limit(loop_rate_limit_attempt + 1)
                 job.record_rate_limit(lane.provider_alias, cooling_down=True)
                 job.record_lane_tuning(lane)
                 LOGGER.warning(
@@ -616,86 +626,101 @@ async def _process_batch(
                     lane.lane_id,
                     lane.provider_alias,
                     lane.model,
-                    attempt + 1,
+                    loop_attempt + loop_rate_limit_attempt + 1,
                     delay,
                 )
+                loop_rate_limit_attempt += 1
             else:
-                if lane is not None and attempt < MAX_RETRIES:
-                    lane.defer_before_retry(attempt + 1)
+                if lane is not None and loop_attempt < MAX_RETRIES:
+                    lane.defer_before_retry(loop_attempt + 1)
                 LOGGER.error(
                     "Provider batch attempt %s failed for job %s "
                     "lane_id=%s provider_alias=%s (%s, code=%s)",
-                    attempt + 1,
+                    loop_attempt + loop_rate_limit_attempt + 1,
                     job.job_id,
                     lane.lane_id if lane is not None else None,
                     provider_alias,
                     type(exc).__name__,
                     detail.error_code,
                 )
+                loop_attempt += 1
+
             last_failures.update({record.record_id: detail for record in current_batch})
-            valid_results: list[SummaryArtifactLine] = []
-            retry_records = current_batch
-            validation_errors: dict[str, FailureDetail] = {}
-        else:
-            valid_results, retry_records, validation_errors = _validate_results(
-                job,
-                current_batch,
-                results,
-                lane=lane,
-                attempt_count=attempt + 1,
-            )
-            if lane is not None:
-                if not retry_records:
-                    lane.record_success()
-                    job.record_lane_tuning(lane)
-                else:
-                    rate_limited = any(
-                        failure.error_code == "provider_rate_limited"
-                        for failure in validation_errors.values()
-                    )
-                    if rate_limited:
-                        lane.record_rate_limit_response()
-                        delay = lane.defer_after_rate_limit(attempt + 1)
-                        job.record_rate_limit(lane.provider_alias, cooling_down=True)
-                        job.record_lane_tuning(lane)
-                        LOGGER.warning(
-                            "Provider result rate limited lane_id=%s provider_alias=%s "
-                            "model=%s attempt=%s cooldown_seconds=%.2f",
-                            lane.lane_id,
-                            lane.provider_alias,
-                            lane.model,
-                            attempt + 1,
-                            delay,
-                        )
-                    elif attempt < MAX_RETRIES:
-                        lane.defer_before_retry(attempt + 1)
+            if single_attempt:
+                return current_batch, last_failures, was_rate_limited
+            
+            # Non-single attempt retry loop checks
+            if loop_attempt > MAX_RETRIES or loop_rate_limit_attempt > max_rate_limits:
+                _append_failed_records(job, current_batch, summary_style, failures=last_failures)
+                break
+            
+            job.stats["retry_count"] += 1
+            job.touch()
+            continue
+
+        valid_results, retry_records, validation_errors = _validate_results(
+            job,
+            current_batch,
+            results,
+            lane=lane,
+            attempt_count=loop_attempt + loop_rate_limit_attempt + 1,
+        )
+
         job.artifact_lines.extend(valid_results)
         job.completed_records += len(valid_results)
         last_failures.update(validation_errors)
         current_batch = retry_records
         job.touch()
 
-        if current_batch and attempt < MAX_RETRIES:
+        if single_attempt:
+            was_rate_limited = any(
+                f.error_code == "provider_rate_limited" for f in validation_errors.values()
+            )
+            if current_batch and lane is not None:
+                if was_rate_limited:
+                    lane.record_rate_limit_response()
+                    lane.defer_after_rate_limit(loop_rate_limit_attempt + 1)
+                    job.record_rate_limit(lane.provider_alias, cooling_down=True)
+                    job.record_lane_tuning(lane)
+                else:
+                    if loop_attempt < MAX_RETRIES:
+                        lane.defer_before_retry(loop_attempt + 1)
+            return current_batch, validation_errors, was_rate_limited
+
+        if current_batch:
+            rate_limited = any(
+                failure.error_code == "provider_rate_limited"
+                for failure in validation_errors.values()
+            )
+            if lane is not None:
+                if rate_limited:
+                    lane.record_rate_limit_response()
+                    delay = lane.defer_after_rate_limit(loop_rate_limit_attempt + 1)
+                    job.record_rate_limit(lane.provider_alias, cooling_down=True)
+                    job.record_lane_tuning(lane)
+                    loop_rate_limit_attempt += 1
+                else:
+                    if loop_attempt < MAX_RETRIES:
+                        lane.defer_before_retry(loop_attempt + 1)
+                    loop_attempt += 1
+            else:
+                loop_attempt += 1
+
+            if loop_attempt > MAX_RETRIES or loop_rate_limit_attempt > max_rate_limits:
+                _append_failed_records(job, current_batch, summary_style, failures=last_failures)
+                break
+
             job.stats["retry_count"] += 1
             job.touch()
-            LOGGER.info(
-                "Retrying %s records in job %s provider_alias=%s",
-                len(current_batch),
-                job.job_id,
-                provider_alias,
-            )
+        else:
+            if lane is not None:
+                lane.record_success()
+                job.record_lane_tuning(lane)
+            job.stats["completed_batches"] += 1
+            job.touch()
+    return None
 
-    if current_batch:
-        LOGGER.error("Exhausted retries for %s records in job %s", len(current_batch), job.job_id)
-        _append_failed_records(
-            job,
-            current_batch,
-            summary_style,
-            failures=last_failures,
-        )
-    else:
-        job.stats["completed_batches"] += 1
-        job.touch()
+
 
 
 def _append_failed_records(
@@ -876,10 +901,15 @@ async def _run_job_background(job: JobState, request: SummaryRequest) -> None:
     job.stats["provider_adaptive_adjustments_by_alias"] = {
         lane.provider_alias: lane.adaptive_adjustment_count for lane in lanes
     }
-    lane_queue: asyncio.Queue[QuotaLane] = asyncio.Queue()
-    for lane in lanes:
-        lane_queue.put_nowait(lane)
-    parallelism = min(settings.summary_max_parallel_lanes, len(lanes))
+    job.stats["lane_unavailability_reasons"] = {
+        lane.provider_alias: "none" for lane in lanes
+    }
+
+    batch_queue: asyncio.Queue[tuple[list[InputRecord], int, int]] = asyncio.Queue()
+    for batch in batches:
+        batch_queue.put_nowait((batch, 0, 0))
+
+    parallelism = min(settings.summary_max_parallel_lanes, len(lanes)) if lanes else 1
     job.stats["scheduler_parallelism"] = parallelism
     LOGGER.info(
         "Summary scheduler job_id=%s provider=%s configured_lanes=%s "
@@ -894,47 +924,156 @@ async def _run_job_background(job: JobState, request: SummaryRequest) -> None:
         len(batches),
         settings.summary_batch_max_records,
     )
-    semaphore = asyncio.Semaphore(parallelism)
     maximum_calls = (
         settings.summary_max_provider_calls_per_job if provider_name == "gemini" else None
     )
 
-    async def worker(batch: list[InputRecord]) -> None:
-        async with semaphore:
-            lane = await lane_queue.get()
+    async def acquire_best_lane() -> QuotaLane | None:
+        if not lanes:
+            return None
+        while job.status == "running":
+            now = time.monotonic()
+            
+            reasons = {}
+            for lane in lanes:
+                reasons[lane.provider_alias] = lane.get_unavailability_reason(now)
+            job.stats["lane_unavailability_reasons"] = reasons
+
+            best_lane = None
+            earliest_time = float("inf")
+
+            for lane in lanes:
+                if not lane.enabled:
+                    continue
+                if lane.is_in_flight():
+                    continue
+                avail_at = lane.get_available_at(now)
+                
+                last_used = lane.last_dispatch_time or 0.0
+                if avail_at < earliest_time:
+                    earliest_time = avail_at
+                    best_lane = lane
+                elif abs(avail_at - earliest_time) < 0.001:
+                    if best_lane is None or last_used < (best_lane.last_dispatch_time or 0.0):
+                        best_lane = lane
+
+            if best_lane is None:
+                await asyncio.sleep(0.05)
+                continue
+
+            if earliest_time <= now:
+                return best_lane
+            else:
+                sleep_time = earliest_time - now
+                await asyncio.sleep(min(sleep_time, 0.5))
+        return None
+
+    async def worker() -> None:
+        while not batch_queue.empty() and job.status == "running":
             try:
+                batch, ordinary_attempts, rate_limit_attempts = await batch_queue.get()
+            except asyncio.CancelledError:
+                break
+
+            lane = await acquire_best_lane()
+            if lanes and lane is None:
+                batch_queue.task_done()
+                continue
+
+            lane_id = lane.lane_id if lane is not None else "default"
+            provider_alias = lane.provider_alias if lane is not None else "default"
+            provider_instance = providers[lane_id] if lane is not None else next(iter(providers.values()))
+
+            if lane is not None:
                 job.provider_batch_started(lane.provider_alias)
-                await _process_batch(
+
+            try:
+                retry_records, validation_errors, was_rate_limited = await _process_batch(
                     job,
                     batch,
-                    providers[lane.lane_id],
+                    provider_instance,
                     request.summary_style,
                     max_provider_calls=maximum_calls,
                     lane=lane,
+                    attempt=ordinary_attempts,
+                    rate_limit_attempt=rate_limit_attempts,
+                    single_attempt=True,
+                )
+
+                if not retry_records:
+                    if lane is not None:
+                        lane.record_success()
+                        job.record_lane_tuning(lane)
+                    job.stats["completed_batches"] += 1
+                    job.touch()
+                else:
+                    if was_rate_limited:
+                        if rate_limit_attempts < 10:
+                            batch_queue.put_nowait((retry_records, ordinary_attempts, rate_limit_attempts + 1))
+                        else:
+                            LOGGER.error("Exhausted rate limit retries for %s records in job %s", len(retry_records), job.job_id)
+                            _append_failed_records(
+                                job,
+                                retry_records,
+                                request.summary_style,
+                                failures=validation_errors,
+                            )
+                    else:
+                        if ordinary_attempts < MAX_RETRIES:
+                            job.stats["retry_count"] += 1
+                            batch_queue.put_nowait((retry_records, ordinary_attempts + 1, rate_limit_attempts))
+                        else:
+                            LOGGER.error("Exhausted retries for %s records in job %s", len(retry_records), job.job_id)
+                            _append_failed_records(
+                                job,
+                                retry_records,
+                                request.summary_style,
+                                failures=validation_errors,
+                            )
+            except Exception as exc:
+                LOGGER.error("Worker batch processing crashed (%s)", type(exc).__name__)
+                detail = FailureDetail(
+                    error_code="provider_exception",
+                    message=_sanitize_diagnostic_text(f"{type(exc).__name__}: {exc}"),
+                    lane_id=lane_id,
+                    provider_alias=provider_alias,
+                )
+                _append_failed_records(
+                    job,
+                    batch,
+                    request.summary_style,
+                    failures={record.record_id: detail for record in batch},
                 )
             finally:
-                job.provider_batch_finished(lane.provider_alias)
-                lane_queue.put_nowait(lane)
+                if lane is not None:
+                    job.provider_batch_finished(lane.provider_alias)
+                batch_queue.task_done()
 
-    results = await asyncio.gather(*(worker(batch) for batch in batches), return_exceptions=True)
-    for batch, result in zip(batches, results, strict=True):
-        if isinstance(result, BaseException):
-            LOGGER.error(
-                "Unexpected scheduler failure in job %s (%s)",
-                job.job_id,
-                type(result).__name__,
+    # Create worker tasks
+    tasks = [asyncio.create_task(worker()) for _ in range(parallelism)]
+
+    # Wait for all workers to finish or job status to change
+    await asyncio.gather(*tasks, return_exceptions=True)
+
+    # Clean up remaining queued items if job status changed
+    while not batch_queue.empty():
+        try:
+            batch, ordinary, rate_limit = batch_queue.get_nowait()
+            detail = FailureDetail(
+                error_code="job_stopped",
+                message="Job was stopped or cancelled",
+                attempt_count=ordinary + rate_limit,
+                retry_count=ordinary + rate_limit,
             )
-            message = _sanitize_diagnostic_text(
-                f"{type(result).__name__}: {result}"
-            )
-            job.error = f"Unexpected scheduler failure: {message}"
-            failure = FailureDetail(error_code="provider_exception", message=message)
             _append_failed_records(
                 job,
                 batch,
                 request.summary_style,
-                failures={record.record_id: failure for record in batch},
+                failures={record.record_id: detail for record in batch},
             )
+            batch_queue.task_done()
+        except asyncio.QueueEmpty:
+            break
 
     processed_records = job.completed_records + job.failed_records
     job.status = (
@@ -954,6 +1093,10 @@ async def _run_job_background(job: JobState, request: SummaryRequest) -> None:
             )
         else:
             job.error = "One or more provider results failed"
+
+    job.stats["lane_unavailability_reasons"] = {
+        lane.provider_alias: "none" for lane in lanes
+    }
     job.touch()
 
 
