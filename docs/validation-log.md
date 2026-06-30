@@ -156,23 +156,98 @@ Validated:
 - Pause/resume roadmap captured.
 - OpenStax deferral criteria captured.
 
+## 2026-06-30 — Backend pause/resume proxy
+
+Commit: a22a24f `Add backend pause resume proxy`
+
+Validated:
+- Added backend endpoints:
+  - POST /jobs/{job_id}/pause
+  - POST /jobs/{job_id}/resume
+- Remote polling recognizes paused.
+- Paused polling cycles do not exhaust DEEPREADER_REMOTE_SUMMARY_MAX_POLLS.
+- Remote cancelled is terminal and skips artifact import.
+- Local cancelled is not overwritten by later remote statuses.
+- Cancel from paused works and remains terminal.
+- Backend tests passed:
+  - tests/test_jobs_api.py: 12 passed
+  - tests/test_remote_summary.py: 18 passed
+  - full backend suite: 86 passed
+- No uvicorn, canary, OpenStax, or provider calls during implementation.
+
+## 2026-06-30 — Frontend pause/resume controls
+
+Commit: 697c4da `Add frontend pause resume controls`
+
+Validated:
+- Added Pause button for running remote jobs.
+- Added Resume button for paused remote jobs.
+- Cancel remains available for pending, accepted, running, and paused jobs.
+- Terminal jobs show no lifecycle controls.
+- Paused status styling added.
+- Paused progress displays clearly.
+- Frontend production build passed with pnpm run build.
+- No uvicorn, canary, OpenStax, or provider calls during implementation.
+
+## 2026-06-30 — Mock lifecycle smoke script
+
+Commits:
+- a6d86d3 `Add mock lifecycle smoke script`
+- 7a70777 `Harden mock lifecycle smoke script`
+- 682c98b `Allow paused smoke to settle`
+
+Validated:
+- Reusable script added at scripts/smoke_mock_lifecycle.py.
+- Static compile passed.
+- git diff --check passed.
+- Script uses mock provider only.
+- Script does not source .env.local.
+- Script does not use OpenStax.
+- Script does not make Gemini/provider API calls.
+
+## 2026-06-30 — Full local mock lifecycle smoke
+
+Validated manually from native terminal:
+- Backend reachable: PASS
+- Paragraph-summary-service reachable and configured with mock provider: PASS
+
+Scenario 1:
+- submit synthetic document
+- job entered running
+- pause through backend
+- backend status paused
+- remote service status paused
+- one in-flight batch was allowed to finish during settle
+- paused progress then stayed stable
+- resume through backend
+- job completed
+- background run returned 200
+- PASS
+
+Scenario 2:
+- submit synthetic document
+- pause through backend
+- cancel through backend
+- final status cancelled
+- cancelled was not overwritten
+- background run returned 200
+- PASS
+
+Final result:
+- ALL SMOKE SCENARIOS PASSED
+- No Gemini calls
+- No OpenStax
+
 ## Current validated state
 
-- Gemini provider path: fixed and tiny live-canary validated.
-- Mock provider: implemented for offline smoke tests.
-- Progress API: ready.
-- Progress bar UI: implemented.
-- Cancel: implemented, tested, and mock-smoke validated.
-- Cancellation accounting: refined and mock-smoke validated.
-- Paragraph-summary-service pause/resume: implemented and mock-smoke validated.
-- Backend pause/resume proxy: remains missing.
-- Frontend pause/resume controls: remain missing.
-- OpenStax: remains intentionally deferred.
+- Backend pause/resume proxy implemented and tested.
+- Frontend pause/resume controls implemented and built.
+- Full mock lifecycle smoke passed through backend and paragraph-summary-service.
+- OpenStax remains intentionally deferred.
+- Gemini live validation remains tiny-canary only.
 
 ## Remaining gaps
 
-- Backend pause/resume proxy remains missing.
-- Frontend pause/resume controls remain missing.
-- Optional full UI smoke for cancel button through browser.
-- Optional larger bounded non-OpenStax document validation.
-- OpenStax validation remains intentionally deferred.
+- OpenStax bounded validation remains deferred.
+- Gemini batch-size escalation remains deferred.
+- Optional future work: add CI hook or documented make target for mock lifecycle smoke.
