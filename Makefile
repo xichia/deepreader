@@ -69,7 +69,7 @@ canary-gemini-batch-help:
 	@echo "  SUMMARY_SERVICE_PROVIDER=gemini \\\\"
 	@echo "  SUMMARY_SERVICE_MODEL=gemini-3.1-flash-lite \\\\"
 	@echo "  SUMMARY_SERVICE_ENABLE_PROVIDER_CALLS=true \\\\"
-	@echo "  SUMMARY_BATCH_MAX_RECORDS=<10 or 12> \\\\"
+	@echo "  SUMMARY_BATCH_MAX_RECORDS=<10, 12, 16, or 20> \\\\"
 	@echo "  SUMMARY_MAX_PROVIDER_CALLS_PER_JOB=<2 or 1> \\\\"
 	@echo "  SUMMARY_LANE_RPM=15 \\\\"
 	@echo "  PYTHONPATH=services/paragraph-summary-service \\\\"
@@ -80,6 +80,10 @@ canary-gemini-batch-help:
 	@echo "  uv run --with 'httpx>=0.27' python scripts/canary_gemini_batch_escalation.py --total-records 12 --expected-provider gemini --expected-model gemini-3.1-flash-lite --max-provider-calls 2"
 	@echo "  # For Batch Size 12 (cap 1):"
 	@echo "  uv run --with 'httpx>=0.27' python scripts/canary_gemini_batch_escalation.py --total-records 12 --expected-provider gemini --expected-model gemini-3.1-flash-lite --max-provider-calls 1"
+	@echo "  # For Batch Size 16 (cap 1, textbook-hard):"
+	@echo "  uv run --with 'httpx>=0.27' python scripts/canary_gemini_batch_escalation.py --total-records 16 --profile textbook-hard --words-per-record 180 --expected-provider gemini --expected-model gemini-3.1-flash-lite --max-provider-calls 1"
+	@echo "  # For Batch Size 20 (cap 1, textbook-hard):"
+	@echo "  uv run --with 'httpx>=0.27' python scripts/canary_gemini_batch_escalation.py --total-records 20 --profile textbook-hard --words-per-record 180 --expected-provider gemini --expected-model gemini-3.1-flash-lite --max-provider-calls 1"
 
 openstax-bounded-validation-help:
 	@echo "Guarded Bounded OpenStax Validation Workflow Help"
