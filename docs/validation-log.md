@@ -99,6 +99,63 @@ Notes:
 - True provider errors still count as failed.
 - provider_calls_attempted may be nonzero in mock mode because it counts local mock batch calls, not external Gemini calls.
 
+## 2026-06-30 — Paragraph service pause/resume
+
+Commit: 830014a `Add paragraph service pause resume`
+
+Validated:
+- Paragraph-summary-service tests passed: 71/71.
+- Mock-provider pause/resume smoke passed:
+  - provider: mock
+  - submit status: 202
+  - job transitioned running -> paused -> running -> completed
+  - pause stopped new batch progress:
+    - paused later 1: completed 1, provider_calls_attempted 1
+    - paused later 2: completed 1, provider_calls_attempted 1
+  - final completed: 20/20
+  - final failed: 0
+  - provider_calls_attempted: 20 mock calls
+  - rate_limit_count: 0
+  - artifact uniqueness passed: 20 lines and 20 unique record IDs
+  - external Gemini/API calls: 0
+
+Notes:
+- This is paragraph-summary-service only.
+- Backend pause/resume proxy is not implemented yet.
+- Frontend pause/resume controls are not implemented yet.
+- Resume is in-memory only; process restart recovery remains out of scope.
+
+## 2026-06-30 — New Gemini 3.1 Flash-Lite key/model validation
+
+Validated:
+- Tiny live Gemini canary passed using updated .env.local keys.
+- provider: gemini
+- model: gemini-3.1-flash-lite
+- submitted: 12
+- completed: 12
+- failed: 0
+- provider_calls_attempted: 3
+- 429 count: 0
+- effective_config.batch_max_records: 5
+- effective_config.max_provider_calls_per_job: 4
+- live-canary-rec-11 and live-canary-rec-12 completed
+- OpenStax was not touched.
+
+Notes:
+- This validated the new key/model path.
+- It did not change persistent batch-size defaults.
+- Future batch-size escalation remains deferred.
+
+## 2026-06-30 — Feature notes project log
+
+Commit: c54d6c7 `Add feature notes project log`
+
+Validated:
+- docs/project-log/feature-notes.md added.
+- Future Gemini batch-size escalation plan captured.
+- Pause/resume roadmap captured.
+- OpenStax deferral criteria captured.
+
 ## Current validated state
 
 - Gemini provider path: fixed and tiny live-canary validated.
@@ -107,13 +164,15 @@ Notes:
 - Progress bar UI: implemented.
 - Cancel: implemented, tested, and mock-smoke validated.
 - Cancellation accounting: refined and mock-smoke validated.
-- OpenStax: not touched during these validations.
-- Pause: missing.
-- Resume: missing.
+- Paragraph-summary-service pause/resume: implemented and mock-smoke validated.
+- Backend pause/resume proxy: remains missing.
+- Frontend pause/resume controls: remain missing.
+- OpenStax: remains intentionally deferred.
 
 ## Remaining gaps
 
-- Pause/resume design and implementation.
+- Backend pause/resume proxy remains missing.
+- Frontend pause/resume controls remain missing.
 - Optional full UI smoke for cancel button through browser.
 - Optional larger bounded non-OpenStax document validation.
 - OpenStax validation remains intentionally deferred.
