@@ -5,12 +5,19 @@ WARNING: This consumes live Gemini quota when provider-backed summaries are enab
 This script is for manual execution only and must not be run as part of the automated build.
 Ensure sufficient quota headroom before running.
 
+Credential Safety Warning:
+- Gemini API credentials must already be exported in the shell.
+- Do not print secrets.
+- Do not commit .env.local.
+- This helper intentionally does not source .env.local.
+
 Future Native-Terminal commands:
 
 Scenario A: Batch size 10, provider cap 2
   Terminal 1 (paragraph-summary-service):
     cd /Users/ianchia/deepreader
     SUMMARY_SERVICE_PROVIDER=gemini \\
+    SUMMARY_SERVICE_MODEL=gemini-3.1-flash-lite \\
     SUMMARY_SERVICE_ENABLE_PROVIDER_CALLS=true \\
     SUMMARY_BATCH_MAX_RECORDS=10 \\
     SUMMARY_MAX_PROVIDER_CALLS_PER_JOB=2 \\
@@ -19,12 +26,13 @@ Scenario A: Batch size 10, provider cap 2
     uv run --project services/paragraph-summary-service uvicorn app.main:app --host 127.0.0.1 --port 8001
 
   Terminal 2 (run escalation canary script):
-    uv run --with 'httpx>=0.27' python scripts/canary_gemini_batch_escalation.py --total-records 10 --expected-provider gemini --max-provider-calls 2
+    uv run --with 'httpx>=0.27' python scripts/canary_gemini_batch_escalation.py --total-records 12 --expected-provider gemini --expected-model gemini-3.1-flash-lite --max-provider-calls 2
 
 Scenario B: Batch size 12, provider cap 1
   Terminal 1 (paragraph-summary-service):
     cd /Users/ianchia/deepreader
     SUMMARY_SERVICE_PROVIDER=gemini \\
+    SUMMARY_SERVICE_MODEL=gemini-3.1-flash-lite \\
     SUMMARY_SERVICE_ENABLE_PROVIDER_CALLS=true \\
     SUMMARY_BATCH_MAX_RECORDS=12 \\
     SUMMARY_MAX_PROVIDER_CALLS_PER_JOB=1 \\
@@ -33,7 +41,7 @@ Scenario B: Batch size 12, provider cap 1
     uv run --project services/paragraph-summary-service uvicorn app.main:app --host 127.0.0.1 --port 8001
 
   Terminal 2 (run escalation canary script):
-    uv run --with 'httpx>=0.27' python scripts/canary_gemini_batch_escalation.py --total-records 12 --expected-provider gemini --max-provider-calls 1
+    uv run --with 'httpx>=0.27' python scripts/canary_gemini_batch_escalation.py --total-records 12 --expected-provider gemini --expected-model gemini-3.1-flash-lite --max-provider-calls 1
 """
 
 import argparse
@@ -82,6 +90,11 @@ async def main():
         # Check if provider matches what we expect
         if args.expected_provider and health_provider != args.expected_provider:
             print(f"FAIL: Expected provider '{args.expected_provider}', but health shows '{health_provider}'")
+            sys.exit(1)
+
+        # Check if model matches what we expect
+        if args.expected_model and health_model != args.expected_model:
+            print(f"FAIL: Expected model '{args.expected_model}', but health shows '{health_model}'")
             sys.exit(1)
 
         # Submit synthetic records
