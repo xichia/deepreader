@@ -144,7 +144,7 @@ def cancel_job_endpoint(job_id: int, session: Session = Depends(get_session)) ->
     if job is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job not found.")
 
-    if job.status in {"pending", "running"}:
+    if job.status in {"pending", "running", "paused"}:
         if job.remote_job_id:
             from deepreader.summarise.remote_client import RemoteSummaryClient
             try:
@@ -167,6 +167,86 @@ def cancel_job_endpoint(job_id: int, session: Session = Depends(get_session)) ->
                 step.updated_at = utc_now()
 
         session.commit()
+
+    return job_out(job)
+
+
+@router.post("/{job_id}/pause", response_model=JobOut)
+def pause_job_endpoint(job_id: int, session: Session = Depends(get_session)) -> JobOut:
+    job = get_job(session, job_id)
+    if job is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job not found.")
+
+    if not job.remote_job_id:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Local inline jobs are not pausable."
+        )
+
+    import httpx
+    from deepreader.summarise.remote_client import RemoteSummaryClient
+    from deepreader.storage.repositories import set_job_remote_progress
+
+    try:
+        client = RemoteSummaryClient()
+        remote_res = client.pause_job(job.remote_job_id)
+    except Exception as exc:
+        cause = exc.__cause__
+        if isinstance(cause, httpx.HTTPStatusError) and cause.response.status_code == 409:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Remote transition conflict."
+            )
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail="Remote summary service unavailable."
+            )
+
+    set_job_remote_progress(session, job, remote_job_id=job.remote_job_id, status_data=remote_res)
+    job.status = "paused"
+    job.finished_at = None
+    session.commit()
+
+    return job_out(job)
+
+
+@router.post("/{job_id}/resume", response_model=JobOut)
+def resume_job_endpoint(job_id: int, session: Session = Depends(get_session)) -> JobOut:
+    job = get_job(session, job_id)
+    if job is None:
+        raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job not found.")
+
+    if not job.remote_job_id:
+        raise HTTPException(
+            status_code=status.HTTP_409_CONFLICT,
+            detail="Local inline jobs are not resumable."
+        )
+
+    import httpx
+    from deepreader.summarise.remote_client import RemoteSummaryClient
+    from deepreader.storage.repositories import set_job_remote_progress
+
+    try:
+        client = RemoteSummaryClient()
+        remote_res = client.resume_job(job.remote_job_id)
+    except Exception as exc:
+        cause = exc.__cause__
+        if isinstance(cause, httpx.HTTPStatusError) and cause.response.status_code == 409:
+            raise HTTPException(
+                status_code=status.HTTP_409_CONFLICT,
+                detail="Remote transition conflict."
+            )
+        else:
+            raise HTTPException(
+                status_code=status.HTTP_502_BAD_GATEWAY,
+                detail="Remote summary service unavailable."
+            )
+
+    set_job_remote_progress(session, job, remote_job_id=job.remote_job_id, status_data=remote_res)
+    job.status = "running"
+    job.finished_at = None
+    session.commit()
 
     return job_out(job)
 

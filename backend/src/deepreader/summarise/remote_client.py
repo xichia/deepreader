@@ -56,3 +56,23 @@ class RemoteSummaryClient:
         except Exception as exc:
             LOGGER.error("Failed to cancel remote summary job: %s", exc)
             raise RuntimeError(f"Remote summary service error: {exc}") from exc
+
+    def pause_job(self, job_id: str) -> dict[str, Any]:
+        """Pause a remote summary job."""
+        try:
+            response = httpx.post(f"{self.base_url}/jobs/{job_id}/pause")
+            response.raise_for_status()
+            return response.json()
+        except Exception as exc:
+            LOGGER.error("Failed to pause remote summary job: %s", exc)
+            raise RuntimeError(f"Remote summary service error: {exc}") from exc
+
+    def resume_job(self, job_id: str) -> dict[str, Any]:
+        """Resume a remote summary job."""
+        try:
+            response = httpx.post(f"{self.base_url}/jobs/{job_id}/resume")
+            response.raise_for_status()
+            return response.json()
+        except Exception as exc:
+            LOGGER.error("Failed to resume remote summary job: %s", exc)
+            raise RuntimeError(f"Remote summary service error: {exc}") from exc

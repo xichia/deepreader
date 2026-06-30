@@ -219,11 +219,37 @@ class SummaryJobRunner:
                 refresh_job_progress(session, job)
                 session.commit()
 
+            poll_number = 0
             remote_max_polls = get_remote_max_polls()
             remote_poll_interval = get_remote_poll_interval()
 
-            for poll_number in range(remote_max_polls):
+            while poll_number < remote_max_polls:
+                session.refresh(job)
+                if job.status == "cancelled":
+                    break
+
                 status_data = client.get_job_status(remote_job_id)
+                remote_status = status_data.get("status")
+
+                session.refresh(job)
+                if job.status == "cancelled":
+                    break
+
+                if remote_status == "paused":
+                    job.status = "paused"
+                elif remote_status in {"running", "pending", "accepted"}:
+                    job.status = "running"
+                elif remote_status == "cancelled":
+                    job.status = "cancelled"
+                    from deepreader.storage.repositories import utc_now
+                    job.finished_at = utc_now()
+                    for step in job.steps:
+                        if step.status in {"pending", "running"}:
+                            step.status = "failed"
+                            step.error_message = "Job was cancelled."
+                            step.finished_at = utc_now()
+                            step.updated_at = utc_now()
+
                 set_job_remote_progress(
                     session,
                     job,
@@ -231,12 +257,20 @@ class SummaryJobRunner:
                     status_data=status_data,
                 )
                 session.commit()
-                if status_data.get("status") in {"completed", "failed"}:
+
+                if remote_status in {"completed", "failed", "cancelled"}:
                     break
-                if poll_number < remote_max_polls - 1:
-                    time.sleep(remote_poll_interval)
+
+                if remote_status != "paused":
+                    poll_number += 1
+
+                time.sleep(remote_poll_interval)
             else:
                 raise TimeoutError(f"Remote summary job {remote_job_id} did not finish before the polling timeout.")
+
+            session.refresh(job)
+            if job.status == "cancelled":
+                return job
 
             artifact = client.get_job_artifact(remote_job_id)
             import_stats = import_summary_artifact(
@@ -305,6 +339,8 @@ class SummaryJobRunner:
             persisted_job = get_job(session, job.id)
             if persisted_job is None:  # pragma: no cover - defensive persistence guard
                 raise
+            if persisted_job.status == "cancelled":
+                return persisted_job
             prefix = f"Remote summary job {remote_job_id} failed" if remote_job_id else "Remote summary submission failed"
             error_message = f"{prefix}: {sanitize_diagnostic_text(exc)}"
             LOGGER.error("%s", error_message)

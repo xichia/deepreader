@@ -202,3 +202,179 @@ def test_jobs_api_cancels_active_job(client: TestClient, examples_dir: Path, mon
     payload = cancel_response.json()
     assert payload["status"] == "cancelled"
     assert remote_cancel_calls == ["mock-remote-id"]
+
+
+def test_jobs_api_pause_and_resume_routes(client: TestClient, examples_dir: Path, monkeypatch) -> None:
+    source_path = examples_dir / "simple_manual.txt"
+    ingest_response = client.post(
+        "/documents/ingest/text",
+        files={"file": (source_path.name, source_path.read_bytes(), "text/plain")},
+    )
+    document_id = ingest_response.json()["document"]["id"]
+    job_payload = client.post(f"/documents/{document_id}/summaries/run").json()
+
+    with client.app.state.SessionLocal() as session:
+        job = get_job(session, job_payload["id"])
+        assert job is not None
+        job.status = "running"
+        job.remote_job_id = "mock-remote-id"
+        session.commit()
+
+    remote_pause_calls = []
+    remote_resume_calls = []
+
+    class MockRemoteClient:
+        def __init__(self):
+            pass
+        def pause_job(self, remote_job_id: str):
+            remote_pause_calls.append(remote_job_id)
+            return {"job_id": remote_job_id, "status": "paused"}
+        def resume_job(self, remote_job_id: str):
+            remote_resume_calls.append(remote_job_id)
+            return {"job_id": remote_job_id, "status": "running"}
+
+    from deepreader.summarise import remote_client
+    monkeypatch.setattr(remote_client, "RemoteSummaryClient", MockRemoteClient)
+
+    # Pause
+    pause_response = client.post(f"/jobs/{job_payload['id']}/pause")
+    assert pause_response.status_code == 200
+    payload = pause_response.json()
+    assert payload["status"] == "paused"
+    assert remote_pause_calls == ["mock-remote-id"]
+
+    # Resume
+    resume_response = client.post(f"/jobs/{job_payload['id']}/resume")
+    assert resume_response.status_code == 200
+    payload = resume_response.json()
+    assert payload["status"] == "running"
+    assert remote_resume_calls == ["mock-remote-id"]
+
+
+def test_jobs_api_pause_resume_no_remote_id_returns_409(client: TestClient, examples_dir: Path) -> None:
+    source_path = examples_dir / "simple_manual.txt"
+    ingest_response = client.post(
+        "/documents/ingest/text",
+        files={"file": (source_path.name, source_path.read_bytes(), "text/plain")},
+    )
+    document_id = ingest_response.json()["document"]["id"]
+    job_payload = client.post(f"/documents/{document_id}/summaries/run").json()
+
+    # Local job has no remote_job_id
+    pause_response = client.post(f"/jobs/{job_payload['id']}/pause")
+    assert pause_response.status_code == 409
+    assert "local inline jobs are not pausable" in pause_response.json()["detail"].lower()
+
+    resume_response = client.post(f"/jobs/{job_payload['id']}/resume")
+    assert resume_response.status_code == 409
+    assert "local inline jobs are not resumable" in resume_response.json()["detail"].lower()
+
+
+def test_jobs_api_remote_transition_conflict_returns_409(client: TestClient, examples_dir: Path, monkeypatch) -> None:
+    source_path = examples_dir / "simple_manual.txt"
+    ingest_response = client.post(
+        "/documents/ingest/text",
+        files={"file": (source_path.name, source_path.read_bytes(), "text/plain")},
+    )
+    document_id = ingest_response.json()["document"]["id"]
+    job_payload = client.post(f"/documents/{document_id}/summaries/run").json()
+
+    with client.app.state.SessionLocal() as session:
+        job = get_job(session, job_payload["id"])
+        assert job is not None
+        job.status = "running"
+        job.remote_job_id = "mock-remote-id"
+        session.commit()
+
+    import httpx
+
+    class MockRemoteClient:
+        def __init__(self):
+            pass
+        def pause_job(self, remote_job_id: str):
+            request = httpx.Request("POST", "http://test/jobs/mock-remote-id/pause")
+            response = httpx.Response(409, request=request, json={"detail": "Conflict"})
+            exc = httpx.HTTPStatusError("Conflict", request=request, response=response)
+            raise RuntimeError("Conflict error") from exc
+
+    from deepreader.summarise import remote_client
+    monkeypatch.setattr(remote_client, "RemoteSummaryClient", MockRemoteClient)
+
+    pause_response = client.post(f"/jobs/{job_payload['id']}/pause")
+    assert pause_response.status_code == 409
+    assert "remote transition conflict" in pause_response.json()["detail"].lower()
+
+    # Verify status is unchanged
+    detail_response = client.get(f"/jobs/{job_payload['id']}")
+    assert detail_response.json()["status"] == "running"
+
+
+def test_jobs_api_remote_unavailable_returns_502(client: TestClient, examples_dir: Path, monkeypatch) -> None:
+    source_path = examples_dir / "simple_manual.txt"
+    ingest_response = client.post(
+        "/documents/ingest/text",
+        files={"file": (source_path.name, source_path.read_bytes(), "text/plain")},
+    )
+    document_id = ingest_response.json()["document"]["id"]
+    job_payload = client.post(f"/documents/{document_id}/summaries/run").json()
+
+    with client.app.state.SessionLocal() as session:
+        job = get_job(session, job_payload["id"])
+        assert job is not None
+        job.status = "running"
+        job.remote_job_id = "mock-remote-id"
+        session.commit()
+
+    import httpx
+
+    class MockRemoteClient:
+        def __init__(self):
+            pass
+        def pause_job(self, remote_job_id: str):
+            request = httpx.Request("POST", "http://test/jobs/mock-remote-id/pause")
+            exc = httpx.ConnectError("Connection refused", request=request)
+            raise RuntimeError("Connection error") from exc
+
+    from deepreader.summarise import remote_client
+    monkeypatch.setattr(remote_client, "RemoteSummaryClient", MockRemoteClient)
+
+    pause_response = client.post(f"/jobs/{job_payload['id']}/pause")
+    assert pause_response.status_code == 502
+    assert "remote summary service unavailable" in pause_response.json()["detail"].lower()
+
+    # Verify status is unchanged
+    detail_response = client.get(f"/jobs/{job_payload['id']}")
+    assert detail_response.json()["status"] == "running"
+
+
+def test_jobs_api_cancel_from_paused(client: TestClient, examples_dir: Path, monkeypatch) -> None:
+    source_path = examples_dir / "simple_manual.txt"
+    ingest_response = client.post(
+        "/documents/ingest/text",
+        files={"file": (source_path.name, source_path.read_bytes(), "text/plain")},
+    )
+    document_id = ingest_response.json()["document"]["id"]
+    job_payload = client.post(f"/documents/{document_id}/summaries/run").json()
+
+    with client.app.state.SessionLocal() as session:
+        job = get_job(session, job_payload["id"])
+        assert job is not None
+        job.status = "paused"
+        job.remote_job_id = "mock-remote-id"
+        session.commit()
+
+    remote_cancel_calls = []
+    class MockRemoteClient:
+        def __init__(self):
+            pass
+        def cancel_job(self, remote_job_id: str):
+            remote_cancel_calls.append(remote_job_id)
+            return {"job_id": remote_job_id, "status": "cancelled"}
+
+    from deepreader.summarise import remote_client
+    monkeypatch.setattr(remote_client, "RemoteSummaryClient", MockRemoteClient)
+
+    cancel_response = client.post(f"/jobs/{job_payload['id']}/cancel")
+    assert cancel_response.status_code == 200
+    assert cancel_response.json()["status"] == "cancelled"
+    assert remote_cancel_calls == ["mock-remote-id"]

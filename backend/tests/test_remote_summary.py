@@ -464,3 +464,145 @@ def test_remote_summary_retry_submits_new_job_if_reuse_fails(db_session, monkeyp
     assert retried_job.status == "completed"
     assert client_2.submit_calls == 1
     assert client_2.artifact_calls == 1
+
+
+def test_remote_summary_polling_paused_to_completed(db_session, monkeypatch):
+    document, records = _create_document_with_records(db_session)
+
+    class SequenceRemoteClient:
+        def __init__(self):
+            self.calls = 0
+            self.submitted_records = []
+            self.document_id = None
+        def submit_job(self, document_id, records):
+            self.document_id = document_id
+            self.submitted_records = records
+            return "remote-seq-1"
+        def get_job_status(self, job_id):
+            self.calls += 1
+            # 1, 2, 3: paused
+            # 4: running
+            # 5: completed
+            if self.calls <= 3:
+                status = "paused"
+            elif self.calls == 4:
+                status = "running"
+            else:
+                status = "completed"
+            return {
+                "status": status,
+                "completed_records": len(self.submitted_records),
+                "failed_records": 0,
+                "total_records": len(self.submitted_records),
+                "stats": {"provider": "mock"},
+                "error": None,
+            }
+        def get_job_artifact(self, job_id):
+            return [
+                {
+                    "document_id": self.document_id,
+                    "record_id": record["record_id"],
+                    "stable_id": record["stable_id"],
+                    "source_hash": record["source_hash"],
+                    "summary_text": f"Summary for {record['record_id']}",
+                    "summary_style": "one_sentence",
+                    "provider": "mock",
+                    "status": "completed",
+                }
+                for record in self.submitted_records
+            ]
+
+    client = SequenceRemoteClient()
+    monkeypatch.setenv("DEEPREADER_SUMMARY_BACKEND", "remote")
+    monkeypatch.setenv("DEEPREADER_ALLOW_REMOTE_SUMMARY_SERVICE", "true")
+    # max polls is 2, but we have 3 paused polls, so if paused polls counted, it would fail/timeout.
+    # Because it succeeds, it proves paused polls do not exhaust the budget.
+    monkeypatch.setenv("DEEPREADER_REMOTE_SUMMARY_MAX_POLLS", "2")
+    monkeypatch.setenv("DEEPREADER_REMOTE_SUMMARY_POLL_INTERVAL_SECONDS", "0.001")
+    monkeypatch.setattr(remote_client_module, "RemoteSummaryClient", lambda: client)
+
+    job = SummaryJobRunner().run_for_document(db_session, document.id)
+    assert job.status == "completed"
+    assert client.calls == 5
+
+
+def test_remote_summary_polling_cancelled_skips_import(db_session, monkeypatch):
+    document, records = _create_document_with_records(db_session)
+
+    class CancelledRemoteClient:
+        def __init__(self):
+            self.submitted_records = []
+            self.artifact_called = False
+        def submit_job(self, document_id, records):
+            self.submitted_records = records
+            return "remote-cancel-1"
+        def get_job_status(self, job_id):
+            return {
+                "status": "cancelled",
+                "completed_records": 0,
+                "failed_records": 0,
+                "total_records": len(self.submitted_records),
+                "stats": {},
+                "error": None,
+            }
+        def get_job_artifact(self, job_id):
+            self.artifact_called = True
+            return []
+
+    client = CancelledRemoteClient()
+    monkeypatch.setenv("DEEPREADER_SUMMARY_BACKEND", "remote")
+    monkeypatch.setenv("DEEPREADER_ALLOW_REMOTE_SUMMARY_SERVICE", "true")
+    monkeypatch.setenv("DEEPREADER_REMOTE_SUMMARY_MAX_POLLS", "5")
+    monkeypatch.setenv("DEEPREADER_REMOTE_SUMMARY_POLL_INTERVAL_SECONDS", "0.001")
+    monkeypatch.setattr(remote_client_module, "RemoteSummaryClient", lambda: client)
+
+    job = SummaryJobRunner().run_for_document(db_session, document.id)
+    assert job.status == "cancelled"
+    assert not client.artifact_called
+    # Check steps are failed
+    steps = list_job_steps(db_session, job.id)
+    assert len(steps) > 0
+    assert all(step.status == "failed" and "cancelled" in step.error_message.lower() for step in steps)
+
+
+def test_remote_summary_polling_respects_local_cancellation(db_session, monkeypatch):
+    document, records = _create_document_with_records(db_session)
+
+    # We need a client that triggers local cancellation during get_job_status
+    class CancellingRemoteClient:
+        def __init__(self, db_session):
+            self.db_session = db_session
+            self.job = None
+            self.artifact_called = False
+        def submit_job(self, document_id, records):
+            # Find the job in DB
+            from deepreader.storage.models import Job
+            self.job = self.db_session.query(Job).filter_by(document_id=document_id).order_by(Job.id.desc()).first()
+            return "remote-local-cancel-1"
+        def get_job_status(self, job_id):
+            # Cancel job locally
+            if self.job:
+                self.job.status = "cancelled"
+                self.db_session.commit()
+            return {
+                "status": "running",
+                "completed_records": 0,
+                "failed_records": 0,
+                "total_records": 1,
+                "stats": {},
+                "error": None,
+            }
+        def get_job_artifact(self, job_id):
+            self.artifact_called = True
+            return []
+
+    client = CancellingRemoteClient(db_session)
+    monkeypatch.setenv("DEEPREADER_SUMMARY_BACKEND", "remote")
+    monkeypatch.setenv("DEEPREADER_ALLOW_REMOTE_SUMMARY_SERVICE", "true")
+    monkeypatch.setenv("DEEPREADER_REMOTE_SUMMARY_MAX_POLLS", "5")
+    monkeypatch.setenv("DEEPREADER_REMOTE_SUMMARY_POLL_INTERVAL_SECONDS", "0.001")
+    monkeypatch.setattr(remote_client_module, "RemoteSummaryClient", lambda: client)
+
+    job = SummaryJobRunner().run_for_document(db_session, document.id)
+    assert job.status == "cancelled"
+    assert not client.artifact_called
