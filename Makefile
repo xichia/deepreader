@@ -1,6 +1,6 @@
 NPM ?= pnpm
 
-.PHONY: test backend-dev install-dev frontend-install frontend-dev frontend-build smoke-mock-lifecycle-help smoke-mock-lifecycle canary-gemini-batch-help openstax-bounded-validation-help
+.PHONY: test backend-dev install-dev frontend-install frontend-dev frontend-build smoke-mock-lifecycle-help smoke-mock-lifecycle canary-gemini-batch-help openstax-bounded-validation-help discover-gemini-batch-limit-help
 
 install-dev:
 	cd backend && python3 -m pip install -e ".[dev]"
@@ -111,3 +111,31 @@ openstax-bounded-validation-help:
 	@echo "  SUMMARY_LANE_RPM=10 \\\\"
 	@echo "  PYTHONPATH=services/paragraph-summary-service \\\\"
 	@echo "  uv run --project services/paragraph-summary-service uvicorn app.main:app --host 127.0.0.1 --port 8001"
+
+discover-gemini-batch-limit-help:
+	@echo "Synthetic Gemini Batch Limit Discovery Help"
+	@echo "=========================================="
+	@echo "WARNING: This consumes live Gemini quota when provider-backed summaries are enabled."
+	@echo "Requirements: manual-only, no OpenStax. Target service must already be running."
+	@echo ""
+	@echo "Note: The service should be started with SUMMARY_BATCH_MAX_RECORDS equal to"
+	@echo "the largest candidate size (e.g. 24 or 32) so that it can handle all candidate sizes."
+	@echo ""
+	@echo "Terminal 1 (paragraph-summary-service configured for live Gemini):"
+	@echo "  cd /Users/ianchia/deepreader"
+	@echo "  SUMMARY_SERVICE_PROVIDER=gemini \\\\"
+	@echo "  SUMMARY_SERVICE_MODEL=gemini-3.1-flash-lite \\\\"
+	@echo "  SUMMARY_SERVICE_ENABLE_PROVIDER_CALLS=true \\\\"
+	@echo "  SUMMARY_MAX_PROVIDER_CALLS_PER_JOB=1 \\\\"
+	@echo "  SUMMARY_BATCH_MAX_RECORDS=24 \\\\"
+	@echo "  SUMMARY_LANE_RPM=15 \\\\"
+	@echo "  PYTHONPATH=services/paragraph-summary-service \\\\"
+	@echo "  uv run --project services/paragraph-summary-service uvicorn app.main:app --host 127.0.0.1 --port 8001"
+	@echo ""
+	@echo "Terminal 2 (run limit discovery script):"
+	@echo "  # Recommended first ladder: 12, 16, 20, 24"
+	@echo "  # Do not start at high sizes before 12 passes."
+	@echo "  uv run --with 'httpx>=0.27' python scripts/discover_gemini_batch_limit.py \\\\"
+	@echo "    --sizes 12,16,20,24 \\\\"
+	@echo "    --profile textbook-hard \\\\"
+	@echo "    --words-per-record 180"
