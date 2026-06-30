@@ -14,7 +14,7 @@ Requirements:
 
 Usage instructions:
 
-Terminal 1 (paragraph-summary-service mock):
+Terminal 1 paragraph-summary-service:
     cd /Users/ianchia/deepreader
     SUMMARY_SERVICE_PROVIDER=mock \
     SUMMARY_SERVICE_ENABLE_PROVIDER_CALLS=false \
@@ -26,7 +26,7 @@ Terminal 1 (paragraph-summary-service mock):
     uv run --project services/paragraph-summary-service \
     uvicorn app.main:app --host 127.0.0.1 --port 8001
 
-Terminal 2 (backend configured to use remote paragraph-summary-service):
+Terminal 2 backend:
     cd /Users/ianchia/deepreader
     DEEPREADER_SUMMARY_BACKEND=remote \
     DEEPREADER_ALLOW_REMOTE_SUMMARY_SERVICE=true \
@@ -36,12 +36,13 @@ Terminal 2 (backend configured to use remote paragraph-summary-service):
     uv run --project backend \
     uvicorn deepreader.api.main:app --host 127.0.0.1 --port 8000
 
-Terminal 3 (run smoke test):
+Terminal 3 smoke:
     cd /Users/ianchia/deepreader
     uv run --with 'httpx>=0.27' python scripts/smoke_mock_lifecycle.py
 """
 
 import asyncio
+import contextlib
 import httpx
 import sys
 
@@ -86,6 +87,61 @@ async def wait_for_job_status(client: httpx.AsyncClient, job_id: int, allowed_st
         await asyncio.sleep(0.1)
     raise TimeoutError(f"Job {job_id} did not transition to one of {allowed_statuses} within {timeout_seconds} seconds.")
 
+async def wait_for_paused_progress_to_settle(client: httpx.AsyncClient, job_id: int, timeout_seconds: float = 10.0, stable_window_seconds: float = 1.5):
+    """Poll the job, ensuring it remains paused, and wait for already in-flight progress to settle."""
+    start_time = asyncio.get_event_loop().time()
+    last_progress = None
+    last_change_time = start_time
+
+    while asyncio.get_event_loop().time() - start_time < timeout_seconds:
+        res = await client.get(f"{BACKEND_URL}/jobs/{job_id}")
+        res.raise_for_status()
+        job = res.json()
+
+        if job["status"] != "paused":
+            raise AssertionError(f"Job {job_id} left 'paused' status early. Current status: {job['status']}")
+
+        prog = get_progress(job)
+        now = asyncio.get_event_loop().time()
+
+        if last_progress is None:
+            last_progress = prog
+            last_change_time = now
+        elif prog != last_progress:
+            print(f"Paused progress advanced from {last_progress} to {prog} during settle period.")
+            last_progress = prog
+            last_change_time = now
+        else:
+            if now - last_change_time >= stable_window_seconds:
+                return job, prog
+
+        await asyncio.sleep(0.2)
+    raise TimeoutError(f"Job {job_id} progress did not settle within {timeout_seconds} seconds.")
+
+async def drain_run_task(run_task: asyncio.Task | None, label: str):
+    """Safely cancel and await a background run task to prevent unretrieved exceptions."""
+    if run_task is None:
+        return
+    if run_task.done():
+        try:
+            res = run_task.result()
+            print(f"Background run task '{label}' finished on its own: {res.status_code}")
+        except Exception as e:
+            print(f"Background run task '{label}' finished with error: {e}")
+    else:
+        try:
+            await asyncio.wait_for(asyncio.shield(run_task), timeout=0.2)
+            res = run_task.result()
+            print(f"Background run task '{label}' completed during drain: {res.status_code}")
+        except asyncio.TimeoutError:
+            print(f"Background run task '{label}' still pending, cancelling...")
+            run_task.cancel()
+            with contextlib.suppress(asyncio.CancelledError, httpx.HTTPError, Exception):
+                await run_task
+            print(f"Background run task '{label}' successfully cancelled/drained.")
+        except Exception as e:
+            print(f"Background run task '{label}' finished with error during drain: {e}")
+
 async def test_health():
     async with httpx.AsyncClient() as client:
         # Backend health check (get documents list)
@@ -113,133 +169,144 @@ async def test_health():
 
 async def run_scenario_1():
     print("\n--- Running Scenario 1: Pause and Resume ---")
-    async with httpx.AsyncClient(timeout=30.0) as client:
-        # Generate at least 12 paragraphs programmatically to avoid startup races
-        doc_content = "\n\n".join(
-            f"This is paragraph {i} of our synthetic smoke test document, designed to run through the mock provider."
-            for i in range(1, 13)
-        )
+    run_task = None
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            # Generate at least 12 paragraphs programmatically to avoid startup races
+            doc_content = "\n\n".join(
+                f"This is paragraph {i} of our synthetic smoke test document, designed to run through the mock provider."
+                for i in range(1, 13)
+            )
 
-        # Ingest the synthetic document
-        ingest_res = await client.post(
-            f"{BACKEND_URL}/documents/ingest/text",
-            files={"file": ("smoke_synthetic.txt", doc_content.encode("utf-8"), "text/plain")},
-        )
-        ingest_res.raise_for_status()
-        doc_id = ingest_res.json()["document"]["id"]
-        print(f"Ingested synthetic document ID: {doc_id}")
+            # Ingest the synthetic document
+            ingest_res = await client.post(
+                f"{BACKEND_URL}/documents/ingest/text",
+                files={"file": ("smoke_synthetic.txt", doc_content.encode("utf-8"), "text/plain")},
+            )
+            ingest_res.raise_for_status()
+            doc_id = ingest_res.json()["document"]["id"]
+            print(f"Ingested synthetic document ID: {doc_id}")
 
-        # Start job run in the background (since it blocks synchronously)
-        run_task = asyncio.create_task(client.post(f"{BACKEND_URL}/documents/{doc_id}/summaries/run"))
+            # Start job run in the background (since it blocks synchronously)
+            run_task = asyncio.create_task(client.post(f"{BACKEND_URL}/documents/{doc_id}/summaries/run"))
 
-        # Wait for the job to start and find it
-        job = await wait_for_job_for_document(client, doc_id)
-        job_id = job["id"]
-        print(f"Found active job ID: {job_id}, status: {job['status']}")
+            # Wait for the job to start and find it
+            job = await wait_for_job_for_document(client, doc_id)
+            job_id = job["id"]
+            print(f"Found active job ID: {job_id}, status: {job['status']}")
 
-        # Pause the job
-        print("Pausing job...")
-        pause_res = await client.post(f"{BACKEND_URL}/jobs/{job_id}/pause")
-        pause_res.raise_for_status()
-        paused_job = pause_res.json()
-        print(f"Paused job response status: {paused_job['status']}")
-        assert paused_job["status"] == "paused", f"Expected status 'paused', got '{paused_job['status']}'"
+            # Pause the job
+            print("Pausing job...")
+            pause_res = await client.post(f"{BACKEND_URL}/jobs/{job_id}/pause")
+            pause_res.raise_for_status()
+            paused_job = pause_res.json()
+            print(f"Pause response progress: {get_progress(paused_job)}")
+            assert paused_job["status"] == "paused", f"Expected status 'paused', got '{paused_job['status']}'"
 
-        # Verify remote status in service is paused
-        remote_res = await client.get(f"{SERVICE_URL}/jobs/{paused_job['remote_job_id']}")
-        remote_res.raise_for_status()
-        remote_data = remote_res.json()
-        print(f"Remote service job status: {remote_data['status']}")
-        assert remote_data["status"] == "paused", f"Expected remote status 'paused', got '{remote_data['status']}'"
+            # Verify remote status in service is paused
+            remote_res = await client.get(f"{SERVICE_URL}/jobs/{paused_job['remote_job_id']}")
+            remote_res.raise_for_status()
+            remote_data = remote_res.json()
+            print(f"Remote service job status: {remote_data['status']}")
+            assert remote_data["status"] == "paused", f"Expected remote status 'paused', got '{remote_data['status']}'"
 
-        # Wait briefly and verify progress does not advance
-        progress_before = get_progress(paused_job)
-        print(f"Waiting to verify progress stays stable at {progress_before}...")
-        await asyncio.sleep(1.5)
-        check_res = await client.get(f"{BACKEND_URL}/jobs/{job_id}")
-        check_res.raise_for_status()
-        check_job = check_res.json()
-        progress_after = get_progress(check_job)
-        print(f"Progress check: before={progress_before}, after={progress_after}")
-        assert progress_before == progress_after, f"Progress advanced from {progress_before} to {progress_after} while paused!"
+            # Wait for paused progress to settle
+            settled_job, settled_progress = await wait_for_paused_progress_to_settle(client, job_id)
+            print(f"Settled paused progress: {settled_progress}")
 
-        # Resume the job
-        print("Resuming job...")
-        resume_res = await client.post(f"{BACKEND_URL}/jobs/{job_id}/resume")
-        resume_res.raise_for_status()
-        resumed_job = resume_res.json()
-        print(f"Resumed job response status: {resumed_job['status']}")
-        assert resumed_job["status"] == "running", f"Expected status 'running', got '{resumed_job['status']}'"
+            # Wait another stable_window_seconds and assert progress hasn't changed
+            await asyncio.sleep(1.5)
+            check_res = await client.get(f"{BACKEND_URL}/jobs/{job_id}")
+            check_res.raise_for_status()
+            check_job = check_res.json()
+            final_progress = get_progress(check_job)
+            print(f"Final paused stability progress check: {final_progress}")
+            assert check_job["status"] == "paused", f"Expected job {job_id} to still be paused, got {check_job['status']}"
+            assert final_progress == settled_progress, f"Progress advanced from {settled_progress} to {final_progress} after settling!"
 
-        # Now await the run task to finish
-        print("Waiting for job completion...")
-        run_res = await run_task
-        run_res.raise_for_status()
-        final_job = run_res.json()
-        print(f"Final job status: {final_job['status']}")
-        assert final_job["status"] == "completed", f"Expected final status 'completed', got '{final_job['status']}'"
-        assert final_job["completed_steps"] == final_job["total_steps"], "Expected all steps completed"
-        assert final_job["failed_steps"] == 0, "Expected zero failed steps"
-        print("PASS: Scenario 1 completed successfully.")
+            # Resume the job
+            print("Resuming job...")
+            resume_res = await client.post(f"{BACKEND_URL}/jobs/{job_id}/resume")
+            resume_res.raise_for_status()
+            resumed_job = resume_res.json()
+            print(f"Resumed job response status: {resumed_job['status']}")
+            assert resumed_job["status"] == "running", f"Expected status 'running', got '{resumed_job['status']}'"
+
+            # Now await the run task to finish
+            print("Waiting for job completion...")
+            run_res = await run_task
+            run_res.raise_for_status()
+            final_job = run_res.json()
+            print(f"Final job status: {final_job['status']}")
+            assert final_job["status"] == "completed", f"Expected final status 'completed', got '{final_job['status']}'"
+            assert final_job["completed_steps"] == final_job["total_steps"], "Expected all steps completed"
+            assert final_job["failed_steps"] == 0, "Expected zero failed steps"
+            print("PASS: Scenario 1 completed successfully.")
+    finally:
+        await drain_run_task(run_task, "scenario_1_run")
 
 async def run_scenario_2():
     print("\n--- Running Scenario 2: Pause and Cancel ---")
-    async with httpx.AsyncClient(timeout=30.0) as client:
-        # Generate at least 8 paragraphs programmatically
-        doc_content = "\n\n".join(
-            f"This is paragraph {i} of our cancel-smoke test document, designed to run through the mock provider."
-            for i in range(1, 9)
-        )
+    run_task = None
+    try:
+        async with httpx.AsyncClient(timeout=30.0) as client:
+            # Generate at least 8 paragraphs programmatically
+            doc_content = "\n\n".join(
+                f"This is paragraph {i} of our cancel-smoke test document, designed to run through the mock provider."
+                for i in range(1, 9)
+            )
 
-        # Ingest the synthetic document
-        ingest_res = await client.post(
-            f"{BACKEND_URL}/documents/ingest/text",
-            files={"file": ("smoke_cancel.txt", doc_content.encode("utf-8"), "text/plain")},
-        )
-        ingest_res.raise_for_status()
-        doc_id = ingest_res.json()["document"]["id"]
-        print(f"Ingested synthetic document ID: {doc_id}")
+            # Ingest the synthetic document
+            ingest_res = await client.post(
+                f"{BACKEND_URL}/documents/ingest/text",
+                files={"file": ("smoke_cancel.txt", doc_content.encode("utf-8"), "text/plain")},
+            )
+            ingest_res.raise_for_status()
+            doc_id = ingest_res.json()["document"]["id"]
+            print(f"Ingested synthetic document ID: {doc_id}")
 
-        # Start job run in the background
-        run_task = asyncio.create_task(client.post(f"{BACKEND_URL}/documents/{doc_id}/summaries/run"))
+            # Start job run in the background
+            run_task = asyncio.create_task(client.post(f"{BACKEND_URL}/documents/{doc_id}/summaries/run"))
 
-        # Wait for the job to start and find it
-        job = await wait_for_job_for_document(client, doc_id)
-        job_id = job["id"]
+            # Wait for the job to start and find it
+            job = await wait_for_job_for_document(client, doc_id)
+            job_id = job["id"]
 
-        # Pause
-        print("Pausing job...")
-        pause_res = await client.post(f"{BACKEND_URL}/jobs/{job_id}/pause")
-        pause_res.raise_for_status()
-        paused_job = pause_res.json()
-        assert paused_job["status"] == "paused", f"Expected job {job_id} to be paused."
+            # Pause
+            print("Pausing job...")
+            pause_res = await client.post(f"{BACKEND_URL}/jobs/{job_id}/pause")
+            pause_res.raise_for_status()
+            paused_job = pause_res.json()
+            assert paused_job["status"] == "paused", f"Expected job {job_id} to be paused."
 
-        # Cancel
-        print("Cancelling job...")
-        cancel_res = await client.post(f"{BACKEND_URL}/jobs/{job_id}/cancel")
-        cancel_res.raise_for_status()
-        cancelled_job = cancel_res.json()
-        print(f"Cancelled job response status: {cancelled_job['status']}")
-        assert cancelled_job["status"] == "cancelled", f"Expected cancelled, got {cancelled_job['status']}"
+            # Cancel
+            print("Cancelling job...")
+            cancel_res = await client.post(f"{BACKEND_URL}/jobs/{job_id}/cancel")
+            cancel_res.raise_for_status()
+            cancelled_job = cancel_res.json()
+            print(f"Cancelled job response status: {cancelled_job['status']}")
+            assert cancelled_job["status"] == "cancelled", f"Expected cancelled, got {cancelled_job['status']}"
 
-        # Wait for background task to finish
-        try:
-            run_res = await run_task
-            final_run_job = run_res.json()
-            print(f"Final background run job status: {final_run_job['status']}")
-            assert final_run_job["status"] == "cancelled", f"Expected final job status cancelled, got {final_run_job['status']}"
-        except Exception as e:
-            print(f"Background run request finished with: {e}")
+            # Wait for background task to finish
+            try:
+                run_res = await run_task
+                final_run_job = run_res.json()
+                print(f"Final background run job status: {final_run_job['status']}")
+                assert final_run_job["status"] == "cancelled", f"Expected final job status cancelled, got {final_run_job['status']}"
+            except Exception as e:
+                print(f"Background run request finished with: {e}")
 
-        # Verify status is not overwritten
-        await asyncio.sleep(1.0)
-        verify_res = await client.get(f"{BACKEND_URL}/jobs/{job_id}")
-        verify_res.raise_for_status()
-        verify_job = verify_res.json()
-        print(f"Verify job status remains cancelled: {verify_job['status']}")
-        assert verify_job["status"] == "cancelled", "Cancelled status was overwritten!"
+            # Verify status is not overwritten
+            await asyncio.sleep(1.0)
+            verify_res = await client.get(f"{BACKEND_URL}/jobs/{job_id}")
+            verify_res.raise_for_status()
+            verify_job = verify_res.json()
+            print(f"Verify job status remains cancelled: {verify_job['status']}")
+            assert verify_job["status"] == "cancelled", "Cancelled status was overwritten!"
 
-        print("PASS: Scenario 2 completed successfully.")
+            print("PASS: Scenario 2 completed successfully.")
+    finally:
+        await drain_run_task(run_task, "scenario_2_run")
 
 async def main():
     await test_health()
