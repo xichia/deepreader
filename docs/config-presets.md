@@ -64,6 +64,11 @@ SUMMARY_MAX_PROVIDER_CALLS_PER_JOB=1
 ### Context
 This is the safest documented configuration candidate for future bounded validation, offering a balanced tradeoff between batch density and token budget headroom.
 
+> [!IMPORTANT]
+> **`SUMMARY_MAX_PROVIDER_CALLS_PER_JOB=1` leaves no retry budget.** Cap 1 allows only the initial provider call. Any retry-triggering event—such as a transient 429 rate limit, a provider 5xx, a schema validation retry, or an unexpected provider error—exhausts the single-call budget and causes the batch to fail. This is acceptable for strict canaries and hard quota containment, but it means even a one-time transient error fails the job.
+>
+> For bounded real-content validation where retry tolerance is desired, choose an explicit higher cap such as **2 or 3** while keeping the cap small and quota-conscious. Increasing the cap must be an explicit validation decision, not a runtime default change.
+
 ---
 
 ## 5. Aggressive Validation-Only Preset

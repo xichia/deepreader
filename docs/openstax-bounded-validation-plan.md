@@ -37,6 +37,9 @@ SUMMARY_MAX_PROVIDER_CALLS_PER_JOB=1
 
 * **Rationale**: This configuration is highly recommended for first planning because it is synthetic-validated and highly quota-conscious.
 
+> [!IMPORTANT]
+> Cap 1 leaves no retry budget. Review the retry-budget implications in [config-presets.md](config-presets.md) (section 4) before choosing between cap 1 and a small higher cap for the actual run.
+
 ---
 
 ## 4. Initial OpenStax Subset Proposal
