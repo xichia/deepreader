@@ -4,6 +4,8 @@
 
 DeepReader v0.6 validates the existing PDF-to-paragraph summary pipeline against the real Gemini API. It does not add a new retrieval or QA model: Gemini only creates one-sentence paragraph summaries inside `paragraph-summary-service`. DeepReader still persists the original source text, validates imported artifacts against document ID, stable ID, and source hash, and uses original source text for citation-grade QA evidence.
 
+> **Model-name note**: The persistent service default is `gemini-2.5-flash` (see `.env.example` and `config.py`). The Makefile canary targets and some validation scripts override this to `gemini-3.1-flash-lite` as a manual canary override. The `.env.local` example below shows the persistent default.
+
 The v0.5 behavior remains the default. `SUMMARY_SERVICE_PROVIDER=mock` requires no API key and makes no external request. Gemini requests are possible only when the provider is explicitly `gemini` and `SUMMARY_SERVICE_ENABLE_PROVIDER_CALLS=true`.
 
 > Privacy warning: Gemini free-tier requests leave the local machine. Use synthetic or non-sensitive PDFs only, and review the current Gemini API data-use terms before testing.

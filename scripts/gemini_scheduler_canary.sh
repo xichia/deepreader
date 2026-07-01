@@ -3,7 +3,7 @@ set -Eeuo pipefail
 
 # Live, quota-bounded scheduler canary. This script never prints API keys or source text.
 
-ROOT="${DEEPREADER_ROOT:-/Users/ianchia/deepreader}"
+ROOT="${DEEPREADER_ROOT:-$(cd "$(dirname "$0")/.." && pwd)}"
 BACKEND_URL="${BACKEND_URL:-http://127.0.0.1:8000}"
 SUMMARY_URL="${SUMMARY_URL:-http://127.0.0.1:8001}"
 DOCUMENT_ID="${DOCUMENT_ID:-}"

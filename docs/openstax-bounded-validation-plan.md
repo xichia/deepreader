@@ -25,7 +25,7 @@ Before executing any phase of this plan, the following conditions must be met:
 
 ## 3. Recommended First Bounded Configuration
 
-For the initial provider-backed planning run, the **Balanced Preset** from [config-presets.md](file:///Users/ianchia/deepreader/docs/config-presets.md) must be configured:
+For the initial provider-backed planning run, the **Balanced Preset** from [config-presets.md](config-presets.md) must be configured:
 
 ```ini
 SUMMARY_BATCH_MAX_RECORDS=16

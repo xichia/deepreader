@@ -14,8 +14,7 @@ Requirements:
 
 Usage instructions:
 
-Terminal 1 paragraph-summary-service:
-    cd /Users/ianchia/deepreader
+Terminal 1 paragraph-summary-service (from repository root):
     SUMMARY_SERVICE_PROVIDER=mock \
     SUMMARY_SERVICE_ENABLE_PROVIDER_CALLS=false \
     SUMMARY_MOCK_PROVIDER_DELAY_MS=750 \
@@ -26,8 +25,7 @@ Terminal 1 paragraph-summary-service:
     uv run --project services/paragraph-summary-service \
     uvicorn app.main:app --host 127.0.0.1 --port 8001
 
-Terminal 2 backend:
-    cd /Users/ianchia/deepreader
+Terminal 2 backend (from repository root):
     DEEPREADER_SUMMARY_BACKEND=remote \
     DEEPREADER_ALLOW_REMOTE_SUMMARY_SERVICE=true \
     DEEPREADER_REMOTE_SUMMARY_POLL_INTERVAL_SECONDS=0.5 \
@@ -36,8 +34,7 @@ Terminal 2 backend:
     uv run --project backend \
     uvicorn deepreader.api.main:app --host 127.0.0.1 --port 8000
 
-Terminal 3 smoke:
-    cd /Users/ianchia/deepreader
+Terminal 3 smoke (from repository root):
     uv run --with 'httpx>=0.27' python scripts/smoke_mock_lifecycle.py
 """
 

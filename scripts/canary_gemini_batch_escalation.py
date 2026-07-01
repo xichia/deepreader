@@ -14,8 +14,7 @@ Credential Safety Warning:
 Future Native-Terminal commands:
 
 Scenario A: Batch size 10, provider cap 2
-  Terminal 1 (paragraph-summary-service):
-    cd /Users/ianchia/deepreader
+  Terminal 1 (paragraph-summary-service, from repository root):
     SUMMARY_SERVICE_PROVIDER=gemini \\
     SUMMARY_SERVICE_MODEL=gemini-3.1-flash-lite \\
     SUMMARY_SERVICE_ENABLE_PROVIDER_CALLS=true \\
@@ -29,8 +28,7 @@ Scenario A: Batch size 10, provider cap 2
     uv run --with 'httpx>=0.27' python scripts/canary_gemini_batch_escalation.py --total-records 12 --expected-provider gemini --expected-model gemini-3.1-flash-lite --max-provider-calls 2
 
 Scenario B: Batch size 12, provider cap 1
-  Terminal 1 (paragraph-summary-service):
-    cd /Users/ianchia/deepreader
+  Terminal 1 (paragraph-summary-service, from repository root):
     SUMMARY_SERVICE_PROVIDER=gemini \\
     SUMMARY_SERVICE_MODEL=gemini-3.1-flash-lite \\
     SUMMARY_SERVICE_ENABLE_PROVIDER_CALLS=true \\
@@ -44,8 +42,7 @@ Scenario B: Batch size 12, provider cap 1
     uv run --with 'httpx>=0.27' python scripts/canary_gemini_batch_escalation.py --total-records 12 --expected-provider gemini --expected-model gemini-3.1-flash-lite --max-provider-calls 1
 
 Scenario C: Batch size 16, provider cap 1, textbook-hard
-  Terminal 1 (paragraph-summary-service):
-    cd /Users/ianchia/deepreader
+  Terminal 1 (paragraph-summary-service, from repository root):
     SUMMARY_SERVICE_PROVIDER=gemini \\
     SUMMARY_SERVICE_MODEL=gemini-3.1-flash-lite \\
     SUMMARY_SERVICE_ENABLE_PROVIDER_CALLS=true \\
@@ -59,8 +56,7 @@ Scenario C: Batch size 16, provider cap 1, textbook-hard
     uv run --with 'httpx>=0.27' python scripts/canary_gemini_batch_escalation.py --total-records 16 --profile textbook-hard --words-per-record 180 --expected-provider gemini --expected-model gemini-3.1-flash-lite --max-provider-calls 1
 
 Scenario D: Batch size 20, provider cap 1, textbook-hard
-  Terminal 1 (paragraph-summary-service):
-    cd /Users/ianchia/deepreader
+  Terminal 1 (paragraph-summary-service, from repository root):
     SUMMARY_SERVICE_PROVIDER=gemini \\
     SUMMARY_SERVICE_MODEL=gemini-3.1-flash-lite \\
     SUMMARY_SERVICE_ENABLE_PROVIDER_CALLS=true \\

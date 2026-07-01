@@ -24,7 +24,7 @@ When preparing or configuring any summary pipeline test, adhere strictly to the 
 
 ## 3. Current / Conservative Preset
 
-This preset represents the mock-based validation environment and the baseline default token budget configuration.
+This preset represents the mock-based validation environment and the synthetic-validation baseline token budget configuration (distinct from the persistent service defaults in `.env.example` and `config.py`).
 
 ### Mock Lifecycle Validation
 ```ini
@@ -32,7 +32,7 @@ SUMMARY_SERVICE_PROVIDER=mock
 SUMMARY_SERVICE_ENABLE_PROVIDER_CALLS=false
 ```
 
-### Baseline Default Token Budget Configuration
+### Synthetic Validation Baseline
 ```ini
 SUMMARY_BATCH_TARGET_TOKENS=2000
 SUMMARY_BATCH_HARD_MAX_TOKENS=3000
