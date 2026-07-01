@@ -78,7 +78,7 @@ In Processing, open the summary job details. Check:
 
 - job type
 - status
-- completed and failed counts
+- completed, failed, and skipped counts
 - step type
 - target stable ID
 - attempts

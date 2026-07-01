@@ -830,3 +830,151 @@ def test_remote_summary_cancel_maps_unfinished_to_skipped_job_cancelled(db_sessi
     assert all(step.status == "skipped" for step in steps)
     assert all(step.error_code == "job_cancelled" for step in steps)
     assert all("cancelled" in (step.error_message or "").lower() for step in steps)
+
+
+def test_remote_summary_retry_selects_failed_and_cancelled_skipped(db_session, monkeypatch):
+    """Remote retry submits only failed + skipped/job_cancelled records, excluding content skips."""
+    from deepreader.storage.repositories import (
+        JOB_STATUS_FAILED,
+        JOB_STATUS_SKIPPED,
+        JOB_STATUS_COMPLETED,
+        create_job,
+        create_job_step,
+        get_job,
+        refresh_job_progress,
+        set_job_status,
+        set_job_step_status,
+    )
+    from deepreader.summarise.service import SUMMARY_JOB_TYPE, SUMMARY_STEP_TYPE, SUMMARY_TARGET_TYPE
+
+    document, records = _create_document_with_records(db_session, count=5)
+
+    job = create_job(
+        db_session,
+        document_id=document.id,
+        job_type=SUMMARY_JOB_TYPE,
+        total_steps=len(records),
+    )
+    steps = []
+    for r in records:
+        step = create_job_step(
+            db_session,
+            job_id=job.id,
+            step_type=SUMMARY_STEP_TYPE,
+            target_type=SUMMARY_TARGET_TYPE,
+            target_id=r.id,
+        )
+        steps.append(step)
+    db_session.commit()
+
+    set_job_step_status(db_session, steps[0], JOB_STATUS_COMPLETED)
+    set_job_step_status(db_session, steps[1], JOB_STATUS_FAILED, error_message="provider error")
+    set_job_step_status(
+        db_session,
+        steps[2],
+        JOB_STATUS_SKIPPED,
+        error_code="job_cancelled",
+        error_message="Job was cancelled.",
+    )
+    set_job_step_status(
+        db_session,
+        steps[3],
+        JOB_STATUS_SKIPPED,
+        error_code="empty_summary",
+        error_message="empty content",
+    )
+    set_job_step_status(db_session, steps[4], JOB_STATUS_SKIPPED, error_message="skip no code")
+    refresh_job_progress(db_session, job)
+    set_job_status(db_session, job, JOB_STATUS_FAILED, error_message="needs retry")
+    db_session.commit()
+    db_session.refresh(job)
+
+    assert job.failed_steps == 1
+    assert job.skipped_steps == 3
+    assert job.completed_steps == 1
+
+    class RetrySelectionFakeClient:
+        def __init__(self):
+            self.submitted_records = []
+            self.submit_calls = 0
+            self.artifact_calls = 0
+            self.status_poll_count = 0
+
+        def submit_job(self, document_id, records_to_send):
+            self.submit_calls += 1
+            self.submitted_records = records_to_send
+            self.job_id = "retry-sel-1"
+            return self.job_id
+
+        def get_job_status(self, job_id):
+            self.status_poll_count += 1
+            return {
+                "status": "completed",
+                "completed_records": len(self.submitted_records),
+                "failed_records": 0,
+                "total_records": len(self.submitted_records),
+                "stats": {},
+                "error": None,
+            }
+
+        def get_job_artifact(self, job_id):
+            self.artifact_calls += 1
+            artifact = []
+            for rec in self.submitted_records:
+                artifact.append(dict(
+                    document_id=document.id,
+                    record_id=rec["record_id"],
+                    stable_id=rec["stable_id"],
+                    source_hash=rec["source_hash"],
+                    summary_text=f"Summary for {rec['stable_id']}",
+                    summary_style="one_sentence",
+                    provider="mock",
+                    model="mock-deterministic-v1",
+                    template_version="v1",
+                    status="completed",
+                    error_code=None,
+                    message=None,
+                    usage={},
+                ))
+            return artifact
+
+    client = RetrySelectionFakeClient()
+    monkeypatch.setenv("DEEPREADER_SUMMARY_BACKEND", "remote")
+    monkeypatch.setenv("DEEPREADER_ALLOW_REMOTE_SUMMARY_SERVICE", "true")
+    monkeypatch.setenv("DEEPREADER_REMOTE_SUMMARY_MAX_POLLS", "5")
+    monkeypatch.setenv("DEEPREADER_REMOTE_SUMMARY_POLL_INTERVAL_SECONDS", "0.001")
+    monkeypatch.setattr(remote_client_module, "RemoteSummaryClient", lambda: client)
+
+    runner = SummaryJobRunner()
+    retried_job = runner.retry_failed_steps(db_session, job.id)
+
+    assert retried_job.status == "completed"
+    assert retried_job.failed_steps == 0
+    assert retried_job.skipped_steps == 2
+    assert retried_job.completed_steps == 3
+
+    assert client.submit_calls == 1, "retry should submit a new remote job"
+    submitted_stable_ids = {r["stable_id"] for r in client.submitted_records}
+    expected_stable_ids = {records[1].stable_id, records[2].stable_id}
+    assert submitted_stable_ids == expected_stable_ids, (
+        f"Expected records 1,2 but got {submitted_stable_ids}"
+    )
+    assert len(submitted_stable_ids) == 2
+
+    assert client.artifact_calls == 1
+
+    refreshed = get_job(db_session, job.id)
+    assert refreshed is not None
+    for step in refreshed.steps:
+        if step.target_id == steps[0].target_id:
+            assert step.status == "completed", "completed step untouched"
+        elif step.target_id == steps[1].target_id:
+            assert step.status == "completed", "failed step retried to completed"
+        elif step.target_id == steps[2].target_id:
+            assert step.status == "completed", "cancelled skipped step retried to completed"
+        elif step.target_id == steps[3].target_id:
+            assert step.status == "skipped", "empty_summary step not retried"
+            assert step.error_code == "empty_summary"
+        elif step.target_id == steps[4].target_id:
+            assert step.status == "skipped", "no-error-code step not retried"
+            assert step.error_code is None
