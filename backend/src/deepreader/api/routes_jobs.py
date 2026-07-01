@@ -33,6 +33,7 @@ class JobStepOut(BaseModel):
     status: str
     attempt_count: int
     error_message: str | None
+    error_code: str | None
     created_at: str
     updated_at: str
     finished_at: str | None
@@ -46,6 +47,7 @@ class JobOut(BaseModel):
     total_steps: int
     completed_steps: int
     failed_steps: int
+    skipped_steps: int
     error_message: str | None
     remote_job_id: str | None
     remote_status: str | None
@@ -71,6 +73,7 @@ def job_step_out(step: JobStep, *, target_stable_id: str | None = None) -> JobSt
         status=step.status,
         attempt_count=step.attempt_count,
         error_message=step.error_message,
+        error_code=step.error_code,
         created_at=step.created_at.isoformat(),
         updated_at=step.updated_at.isoformat(),
         finished_at=step.finished_at.isoformat() if step.finished_at else None,
@@ -88,6 +91,7 @@ def job_out(job: Job, *, include_steps: bool = True) -> JobOut:
         total_steps=job.total_steps,
         completed_steps=job.completed_steps,
         failed_steps=job.failed_steps,
+        skipped_steps=job.skipped_steps,
         error_message=job.error_message,
         remote_job_id=job.remote_job_id,
         remote_status=remote_progress.get("remote_status"),

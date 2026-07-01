@@ -47,6 +47,12 @@ def _ensure_sqlite_job_observability_columns(engine: Engine) -> None:
         statements.append("ALTER TABLE jobs ADD COLUMN remote_job_id VARCHAR(255)")
     if "remote_progress_json" not in column_names:
         statements.append("ALTER TABLE jobs ADD COLUMN remote_progress_json JSON")
+    if "skipped_steps" not in column_names:
+        statements.append("ALTER TABLE jobs ADD COLUMN skipped_steps INTEGER NOT NULL DEFAULT 0")
+    if inspect(engine).has_table("job_steps"):
+        step_columns = {column["name"] for column in inspect(engine).get_columns("job_steps")}
+        if "error_code" not in step_columns:
+            statements.append("ALTER TABLE job_steps ADD COLUMN error_code VARCHAR(50)")
     if not statements:
         return
 

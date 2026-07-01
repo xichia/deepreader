@@ -28,14 +28,24 @@ JOB_STATUS_COMPLETED = "completed"
 JOB_STATUS_FAILED = "failed"
 JOB_STATUS_PAUSED = "paused"
 JOB_STATUS_CANCELLED = "cancelled"
+JOB_STATUS_SKIPPED = "skipped"
 
-VALID_STATUSES = {
+JOB_VALID_STATUSES = {
     JOB_STATUS_PENDING,
     JOB_STATUS_RUNNING,
     JOB_STATUS_COMPLETED,
     JOB_STATUS_FAILED,
     JOB_STATUS_PAUSED,
     JOB_STATUS_CANCELLED,
+}
+
+STEP_VALID_STATUSES = {
+    JOB_STATUS_PENDING,
+    JOB_STATUS_RUNNING,
+    JOB_STATUS_COMPLETED,
+    JOB_STATUS_FAILED,
+    JOB_STATUS_PAUSED,
+    JOB_STATUS_SKIPPED,
 }
 
 
@@ -181,7 +191,7 @@ def set_job_status(
     *,
     error_message: str | None = None,
 ) -> Job:
-    _validate_status(status)
+    _validate_status(status, valid_statuses=JOB_VALID_STATUSES)
     job.status = status
     job.error_message = error_message
     job.updated_at = utc_now()
@@ -231,15 +241,25 @@ def set_job_step_status(
     status: str,
     *,
     error_message: str | None = None,
+    error_code: str | None = None,
     increment_attempt: bool = False,
 ) -> JobStep:
-    _validate_status(status)
+    _validate_status(status, valid_statuses=STEP_VALID_STATUSES)
     step.status = status
     step.error_message = error_message
+    if status in {JOB_STATUS_PENDING, JOB_STATUS_RUNNING, JOB_STATUS_PAUSED}:
+        # Non-terminal statuses must not retain a stale error_code.
+        step.error_code = None
+    elif status == JOB_STATUS_COMPLETED:
+        # Completed clears any stale error_code unless one is explicitly provided.
+        step.error_code = error_code
+    else:
+        # failed or skipped: preserve the provided error_code.
+        step.error_code = error_code
     if increment_attempt:
         step.attempt_count += 1
     step.updated_at = utc_now()
-    if status in {JOB_STATUS_COMPLETED, JOB_STATUS_FAILED}:
+    if status in {JOB_STATUS_COMPLETED, JOB_STATUS_FAILED, JOB_STATUS_SKIPPED}:
         step.finished_at = utc_now()
     else:
         step.finished_at = None
@@ -253,6 +273,7 @@ def refresh_job_progress(session: Session, job: Job) -> Job:
     job.total_steps = len(steps)
     job.completed_steps = sum(1 for step in steps if step.status == JOB_STATUS_COMPLETED)
     job.failed_steps = sum(1 for step in steps if step.status == JOB_STATUS_FAILED)
+    job.skipped_steps = sum(1 for step in steps if step.status == JOB_STATUS_SKIPPED)
     job.updated_at = utc_now()
     session.add(job)
     session.flush()
@@ -361,8 +382,10 @@ def list_summaries_for_search(
     return list(session.scalars(statement))
 
 
-def _validate_status(status: str) -> None:
-    if status not in VALID_STATUSES:
+def _validate_status(status: str, *, valid_statuses: set[str] | None = None) -> None:
+    if valid_statuses is None:
+        valid_statuses = JOB_VALID_STATUSES | STEP_VALID_STATUSES
+    if status not in valid_statuses:
         raise ValueError(f"Invalid status: {status}")
 
 
