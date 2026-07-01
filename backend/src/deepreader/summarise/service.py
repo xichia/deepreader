@@ -390,8 +390,13 @@ class SummaryJobRunner:
         if job.job_type != SUMMARY_JOB_TYPE:
             raise ValueError(f"Job {job_id} is not a summary job.")
 
-        failed_steps = [step for step in list_job_steps(session, job.id) if step.status == JOB_STATUS_FAILED]
-        if not failed_steps:
+        retry_steps = [
+            step
+            for step in list_job_steps(session, job.id)
+            if step.status == JOB_STATUS_FAILED
+            or (step.status == JOB_STATUS_SKIPPED and step.error_code == "job_cancelled")
+        ]
+        if not retry_steps:
             return job
 
         import re
@@ -401,7 +406,7 @@ class SummaryJobRunner:
             if match:
                 reuse_remote_job_id = match.group(1)
 
-        LOGGER.info("Retrying %s failed summary steps for job %s", len(failed_steps), job.id)
+        LOGGER.info("Retrying %s summary steps for job %s", len(retry_steps), job.id)
         set_job_status(session, job, JOB_STATUS_RUNNING)
         session.commit()
 
@@ -409,9 +414,9 @@ class SummaryJobRunner:
         allow_remote = os.getenv("DEEPREADER_ALLOW_REMOTE_SUMMARY_SERVICE", "false").lower() == "true"
 
         if backend == "remote" and allow_remote:
-            failed_records = []
-            failed_steps_to_retry = []
-            for step in failed_steps:
+            retry_records = []
+            retry_steps_to_retry = []
+            for step in retry_steps:
                 record = get_document_record(session, step.target_id)
                 if record is None:
                     set_job_step_status(
@@ -424,10 +429,10 @@ class SummaryJobRunner:
                     refresh_job_progress(session, job)
                     session.commit()
                     continue
-                failed_records.append(record)
-                failed_steps_to_retry.append(step)
+                retry_records.append(record)
+                retry_steps_to_retry.append(step)
 
-            if not failed_records:
+            if not retry_records:
                 refresh_job_progress(session, job)
                 if job.failed_steps:
                     set_job_status(session, job, JOB_STATUS_FAILED, error_message="One or more summary steps failed.")
@@ -440,12 +445,12 @@ class SummaryJobRunner:
             return self._run_remote_job(
                 session,
                 job,
-                failed_records,
-                failed_steps_to_retry,
+                retry_records,
+                retry_steps_to_retry,
                 reuse_remote_job_id=reuse_remote_job_id,
             )
 
-        for step in failed_steps:
+        for step in retry_steps:
             record = get_document_record(session, step.target_id)
             if record is None:
                 set_job_step_status(

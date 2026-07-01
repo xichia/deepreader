@@ -907,3 +907,178 @@ def test_jobs_api_cancel_preserves_terminal_steps_and_skips_unfinished(
     cancelled_skipped = [s for s in steps if s.status == JOB_STATUS_SKIPPED and s.error_code == "job_cancelled"]
     assert len(cancelled_skipped) == len(steps) - 3  # all previously-running
     assert all(s.error_message == "Job was cancelled." for s in cancelled_skipped)
+
+
+def test_jobs_api_retry_includes_skipped_job_cancelled_step(client: TestClient, examples_dir: Path) -> None:
+    source_path = examples_dir / "simple_manual.txt"
+    ingest_response = client.post(
+        "/documents/ingest/text",
+        files={"file": (source_path.name, source_path.read_bytes(), "text/plain")},
+    )
+    document_id = ingest_response.json()["document"]["id"]
+    job_payload = client.post(f"/documents/{document_id}/summaries/run").json()
+
+    with client.app.state.SessionLocal() as session:
+        job = get_job(session, job_payload["id"])
+        assert job is not None
+        target = job.steps[0]
+        first_attempt_count = target.attempt_count
+        set_job_step_status(
+            session,
+            target,
+            JOB_STATUS_SKIPPED,
+            error_code="job_cancelled",
+            error_message="Job was cancelled.",
+        )
+        refresh_job_progress(session, job)
+        set_job_status(session, job, JOB_STATUS_FAILED, error_message="forced retry regression")
+        session.commit()
+
+    retry_response = client.post(f"/jobs/{job_payload['id']}/retry-failed")
+
+    assert retry_response.status_code == 200
+    retried_job = retry_response.json()
+    assert retried_job["status"] == "completed"
+    assert retried_job["failed_steps"] == 0
+    assert retried_job["skipped_steps"] == 0
+    assert retried_job["completed_steps"] == retried_job["total_steps"]
+    steps_response = client.get(f"/jobs/{job_payload['id']}/steps")
+    assert steps_response.status_code == 200
+    matched = [s for s in steps_response.json() if s["id"] == target.id][0]
+    assert matched["status"] == "completed"
+    assert matched["attempt_count"] == first_attempt_count + 1
+
+
+def test_jobs_api_retry_excludes_non_cancel_skipped_steps(client: TestClient, examples_dir: Path) -> None:
+    source_path = examples_dir / "simple_manual.txt"
+    ingest_response = client.post(
+        "/documents/ingest/text",
+        files={"file": (source_path.name, source_path.read_bytes(), "text/plain")},
+    )
+    document_id = ingest_response.json()["document"]["id"]
+    job_payload = client.post(f"/documents/{document_id}/summaries/run").json()
+
+    with client.app.state.SessionLocal() as session:
+        job = get_job(session, job_payload["id"])
+        assert job is not None
+        empty_step = job.steps[0]
+        no_code_step = job.steps[1]
+        empty_attempt = empty_step.attempt_count
+        no_code_attempt = no_code_step.attempt_count
+        set_job_step_status(
+            session,
+            empty_step,
+            JOB_STATUS_SKIPPED,
+            error_code="empty_summary",
+            error_message="skipped content",
+        )
+        set_job_step_status(
+            session,
+            no_code_step,
+            JOB_STATUS_SKIPPED,
+            error_message="skipped without code",
+        )
+        refresh_job_progress(session, job)
+        set_job_status(session, job, JOB_STATUS_FAILED, error_message="no retry candidates")
+        session.commit()
+
+    retry_response = client.post(f"/jobs/{job_payload['id']}/retry-failed")
+
+    assert retry_response.status_code == 200
+    retried_job = retry_response.json()
+    # No retry candidates -> job returned unchanged, still failed.
+    assert retried_job["status"] == "failed"
+    assert retried_job["failed_steps"] == 0
+    assert retried_job["skipped_steps"] == 2
+    steps_response = client.get(f"/jobs/{job_payload['id']}/steps")
+    assert steps_response.status_code == 200
+    steps_json = {s["id"]: s for s in steps_response.json()}
+    assert steps_json[empty_step.id]["status"] == "skipped"
+    assert steps_json[empty_step.id]["error_code"] == "empty_summary"
+    assert steps_json[empty_step.id]["attempt_count"] == empty_attempt
+    assert steps_json[no_code_step.id]["status"] == "skipped"
+    assert steps_json[no_code_step.id]["error_code"] is None
+    assert steps_json[no_code_step.id]["attempt_count"] == no_code_attempt
+
+
+def test_jobs_api_retry_mixed_job_targets_failed_and_cancelled_only(
+    client: TestClient, examples_dir: Path
+) -> None:
+    source_path = examples_dir / "simple_manual.txt"
+    ingest_response = client.post(
+        "/documents/ingest/text",
+        files={"file": (source_path.name, source_path.read_bytes(), "text/plain")},
+    )
+    document_id = ingest_response.json()["document"]["id"]
+    job_payload = client.post(f"/documents/{document_id}/summaries/run").json()
+
+    with client.app.state.SessionLocal() as session:
+        job = get_job(session, job_payload["id"])
+        assert job is not None
+        steps = list(job.steps)
+        assert len(steps) >= 5
+        completed_step_a, failed_step, cancelled_step, empty_step, no_code_step, completed_step_b = steps[:6]
+
+        set_job_step_status(session, failed_step, JOB_STATUS_FAILED, error_message="provider error")
+        set_job_step_status(
+            session,
+            cancelled_step,
+            JOB_STATUS_SKIPPED,
+            error_code="job_cancelled",
+            error_message="Job was cancelled.",
+        )
+        set_job_step_status(
+            session,
+            empty_step,
+            JOB_STATUS_SKIPPED,
+            error_code="empty_summary",
+            error_message="skipped content",
+        )
+        set_job_step_status(
+            session,
+            no_code_step,
+            JOB_STATUS_SKIPPED,
+            error_message="skipped without code",
+        )
+        refresh_job_progress(session, job)
+        set_job_status(session, job, JOB_STATUS_FAILED, error_message="mixed failures")
+        session.commit()
+
+        pre = {s.id: s.attempt_count for s in steps}
+
+    retry_response = client.post(f"/jobs/{job_payload['id']}/retry-failed")
+
+    assert retry_response.status_code == 200
+    retried_job = retry_response.json()
+    total = retried_job["total_steps"]
+    assert retried_job["status"] == "completed"
+    assert retried_job["failed_steps"] == 0
+    assert retried_job["completed_steps"] == total - 2
+    assert retried_job["skipped_steps"] == 2
+
+    steps_response = client.get(f"/jobs/{job_payload['id']}/steps")
+    assert steps_response.status_code == 200
+    after = {s["id"]: s for s in steps_response.json()}
+
+    assert after[completed_step_a.id]["status"] == "completed"
+    assert after[completed_step_a.id]["attempt_count"] == pre[completed_step_a.id]
+    assert after[completed_step_b.id]["status"] == "completed"
+    assert after[completed_step_b.id]["attempt_count"] == pre[completed_step_b.id]
+
+    assert after[failed_step.id]["status"] == "completed"
+    assert after[failed_step.id]["attempt_count"] == pre[failed_step.id] + 1
+    assert after[failed_step.id]["error_message"] is None
+    assert after[failed_step.id]["error_code"] is None
+
+    assert after[cancelled_step.id]["status"] == "completed"
+    assert after[cancelled_step.id]["attempt_count"] == pre[cancelled_step.id] + 1
+    assert after[cancelled_step.id]["error_message"] is None
+    assert after[cancelled_step.id]["error_code"] is None
+
+    assert after[empty_step.id]["status"] == "skipped"
+    assert after[empty_step.id]["error_code"] == "empty_summary"
+    assert after[empty_step.id]["attempt_count"] == pre[empty_step.id]
+
+    assert after[no_code_step.id]["status"] == "skipped"
+    assert after[no_code_step.id]["error_code"] is None
+    assert after[no_code_step.id]["attempt_count"] == pre[no_code_step.id]
