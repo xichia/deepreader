@@ -26,6 +26,7 @@ from deepreader.storage.repositories import (
     get_job,
     list_document_records,
     list_job_steps,
+    mark_unfinished_steps_cancelled,
     refresh_job_progress,
     set_job_status,
     set_job_remote_progress,
@@ -244,12 +245,8 @@ class SummaryJobRunner:
                     job.status = "cancelled"
                     from deepreader.storage.repositories import utc_now
                     job.finished_at = utc_now()
-                    for step in job.steps:
-                        if step.status in {"pending", "running"}:
-                            step.status = "failed"
-                            step.error_message = "Job was cancelled."
-                            step.finished_at = utc_now()
-                            step.updated_at = utc_now()
+                    mark_unfinished_steps_cancelled(session, job)
+                    refresh_job_progress(session, job)
 
                 set_job_remote_progress(
                     session,

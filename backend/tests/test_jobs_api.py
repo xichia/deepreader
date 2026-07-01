@@ -501,9 +501,10 @@ def test_jobs_api_cancel_remote_success_refreshes_progress(client: TestClient, e
     assert payload["finished_at"] is not None
     total = payload["total_steps"]
     assert payload["completed_steps"] == 1
-    assert payload["failed_steps"] == total - 1
+    assert payload["failed_steps"] == 0
+    assert payload["skipped_steps"] == total - 1
     # Counters reflect all terminal accounting.
-    assert payload["completed_steps"] + payload["failed_steps"] == total
+    assert payload["completed_steps"] + payload["failed_steps"] + payload["skipped_steps"] == total
 
 
 def test_jobs_api_cancel_local_running_job_refreshes_progress(client: TestClient, examples_dir: Path) -> None:
@@ -534,8 +535,9 @@ def test_jobs_api_cancel_local_running_job_refreshes_progress(client: TestClient
     assert payload["finished_at"] is not None
     total = payload["total_steps"]
     assert payload["completed_steps"] == 1
-    assert payload["failed_steps"] == total - 1
-    assert payload["completed_steps"] + payload["failed_steps"] == total
+    assert payload["failed_steps"] == 0
+    assert payload["skipped_steps"] == total - 1
+    assert payload["completed_steps"] + payload["failed_steps"] + payload["skipped_steps"] == total
 
 
 def test_jobs_api_cancel_terminates_paused_steps(client: TestClient, examples_dir: Path) -> None:
@@ -570,20 +572,26 @@ def test_jobs_api_cancel_terminates_paused_steps(client: TestClient, examples_di
     total = payload["total_steps"]
     completed = payload["completed_steps"]
     failed = payload["failed_steps"]
+    skipped = payload["skipped_steps"]
     # The previously-completed step stays completed; all previously running or
-    # paused steps must now be terminally failed, with counters refreshed.
+    # paused steps must now be skipped with error_code='job_cancelled'.
     assert completed == 1
-    assert failed == total - 1
-    assert completed + failed == total
+    assert failed == 0
+    assert skipped == total - 1
+    assert completed + failed + skipped == total
 
     # Re-fetch steps and assert no unfinished step remains pending/running/paused.
     steps_response = client.get(f"/jobs/{job_payload['id']}/steps")
     assert steps_response.status_code == 200
-    step_statuses = {step["status"] for step in steps_response.json()}
-    assert step_statuses <= {"completed", "failed"}
+    steps_json = steps_response.json()
+    step_statuses = {step["status"] for step in steps_json}
+    assert step_statuses <= {"completed", "skipped"}
     assert "paused" not in step_statuses
     assert "running" not in step_statuses
     assert "pending" not in step_statuses
+    # Cancelled unfinished steps carry error_code='job_cancelled'.
+    skipped_steps = [step for step in steps_json if step["status"] == "skipped"]
+    assert all(step["error_code"] == "job_cancelled" for step in skipped_steps)
 
 
 def test_jobs_api_cancel_already_cancelled_is_idempotent(client: TestClient, examples_dir: Path, monkeypatch) -> None:
@@ -835,3 +843,67 @@ def test_init_db_migrates_existing_sqlite_jobs_for_skipped_accounting(tmp_path: 
     step_columns = {column["name"] for column in inspect(engine).get_columns("job_steps")}
     assert "error_code" in step_columns
     engine.dispose()
+
+
+def test_jobs_api_cancel_preserves_terminal_steps_and_skips_unfinished(
+    client: TestClient, examples_dir: Path
+) -> None:
+    source_path = examples_dir / "simple_manual.txt"
+    ingest_response = client.post(
+        "/documents/ingest/text",
+        files={"file": (source_path.name, source_path.read_bytes(), "text/plain")},
+    )
+    document_id = ingest_response.json()["document"]["id"]
+    job_payload = client.post(f"/documents/{document_id}/summaries/run").json()
+
+    with client.app.state.SessionLocal() as session:
+        job = get_job(session, job_payload["id"])
+        assert job is not None
+        steps = job.steps
+        # Pre-mark terminal statuses: completed, failed, skipped + two unfinished.
+        set_job_status(session, job, JOB_STATUS_RUNNING)
+        set_job_step_status(session, steps[0], JOB_STATUS_COMPLETED)
+        set_job_step_status(
+            session, steps[1], JOB_STATUS_FAILED, error_code="provider_error", error_message="boom"
+        )
+        set_job_step_status(
+            session, steps[2], JOB_STATUS_SKIPPED, error_code="empty_summary", error_message="empty"
+        )
+        for step in steps[3:]:
+            set_job_step_status(session, step, JOB_STATUS_RUNNING)
+        refresh_job_progress(session, job)
+        session.commit()
+
+    cancel_response = client.post(f"/jobs/{job_payload['id']}/cancel")
+    assert cancel_response.status_code == 200
+    payload = cancel_response.json()
+    assert payload["status"] == "cancelled"
+
+    steps_response = client.get(f"/jobs/{job_payload['id']}/steps")
+    assert steps_response.status_code == 200
+    steps_json = {step["id"]: step for step in steps_response.json()}
+
+    with client.app.state.SessionLocal() as session:
+        job = get_job(session, job_payload["id"])
+        assert job is not None
+        steps = job.steps
+
+    completed = [s for s in steps if s.status == JOB_STATUS_COMPLETED]
+    failed = [s for s in steps if s.status == JOB_STATUS_FAILED]
+    skipped = [s for s in steps if s.status == JOB_STATUS_SKIPPED]
+
+    assert len(completed) == 1
+    assert len(failed) == 1
+    # Pre-existing skipped + the previously-running steps are now all skipped.
+    assert len(skipped) == len(steps) - 2
+    assert payload["failed_steps"] == 1
+    assert payload["skipped_steps"] == len(steps) - 2
+
+    # Pre-existing failed/skipped keep their original error_code; unfinished ones get job_cancelled.
+    failed_step = next(s for s in steps if s.status == JOB_STATUS_FAILED)
+    assert failed_step.error_code == "provider_error"
+    pre_skipped = next(s for s in steps if s.status == JOB_STATUS_SKIPPED and s.error_code == "empty_summary")
+    assert pre_skipped is not None
+    cancelled_skipped = [s for s in steps if s.status == JOB_STATUS_SKIPPED and s.error_code == "job_cancelled"]
+    assert len(cancelled_skipped) == len(steps) - 3  # all previously-running
+    assert all(s.error_message == "Job was cancelled." for s in cancelled_skipped)

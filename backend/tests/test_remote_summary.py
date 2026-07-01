@@ -559,10 +559,12 @@ def test_remote_summary_polling_cancelled_skips_import(db_session, monkeypatch):
     job = SummaryJobRunner().run_for_document(db_session, document.id)
     assert job.status == "cancelled"
     assert not client.artifact_called
-    # Check steps are failed
+    # Unfinished steps are accounted as skipped (not failed) on cancel.
     steps = list_job_steps(db_session, job.id)
     assert len(steps) > 0
-    assert all(step.status == "failed" and "cancelled" in step.error_message.lower() for step in steps)
+    assert all(step.status == "skipped" for step in steps)
+    assert all(step.error_code == "job_cancelled" for step in steps)
+    assert all("cancelled" in (step.error_message or "").lower() for step in steps)
 
 
 def test_remote_summary_polling_respects_local_cancellation(db_session, monkeypatch):
@@ -659,9 +661,9 @@ def test_remote_summary_cancel_during_import_preserves_cancelled(db_session, mon
         from deepreader.storage.models import Job
         from deepreader.storage.repositories import (
             JOB_STATUS_CANCELLED,
+            mark_unfinished_steps_cancelled,
             refresh_job_progress,
             set_job_status,
-            set_job_step_status,
         )
         local_job = (
             session.query(Job)
@@ -671,11 +673,7 @@ def test_remote_summary_cancel_during_import_preserves_cancelled(db_session, mon
         )
         if local_job is not None:
             set_job_status(session, local_job, JOB_STATUS_CANCELLED)
-            for step in local_job.steps:
-                if step.status in {"pending", "running", "paused"}:
-                    set_job_step_status(
-                        session, step, "failed", error_message="Job was cancelled."
-                    )
+            mark_unfinished_steps_cancelled(session, local_job)
             refresh_job_progress(session, local_job)
             session.commit()
         return real_importer(session, document_id, artifact, **kwargs)
@@ -776,3 +774,59 @@ def test_remote_summary_runner_maps_skipped_artifact_to_skipped_step(db_session,
     # Exactly one summary is persisted for the completed record.
     assert len(summaries) == 1
     assert summaries[0].record_id == records[0].id
+
+
+def test_remote_summary_cancel_maps_unfinished_to_skipped_job_cancelled(db_session, monkeypatch):
+    """Remote cancellation polling accounts unfinished steps as skipped/job_cancelled, not failed."""
+    from deepreader.storage.repositories import get_job
+
+    document, records = _create_document_with_records(db_session, count=3)
+
+    class PartialCancelledRemoteClient:
+        def __init__(self):
+            self.submitted_records = []
+            self.document_id = None
+            self.artifact_called = False
+
+        def submit_job(self, document_id, records_to_send):
+            self.document_id = document_id
+            self.submitted_records = records_to_send
+            return "remote-partial-cancel-1"
+
+        def get_job_status(self, job_id):
+            return {
+                "status": "cancelled",
+                "completed_records": 0,
+                "failed_records": 0,
+                "total_records": len(self.submitted_records),
+                "stats": {},
+                "error": None,
+            }
+
+        def get_job_artifact(self, job_id):
+            self.artifact_called = True
+            return []
+
+    client = PartialCancelledRemoteClient()
+    monkeypatch.setenv("DEEPREADER_SUMMARY_BACKEND", "remote")
+    monkeypatch.setenv("DEEPREADER_ALLOW_REMOTE_SUMMARY_SERVICE", "true")
+    monkeypatch.setenv("DEEPREADER_REMOTE_SUMMARY_MAX_POLLS", "5")
+    monkeypatch.setenv("DEEPREADER_REMOTE_SUMMARY_POLL_INTERVAL_SECONDS", "0.001")
+    monkeypatch.setattr(remote_client_module, "RemoteSummaryClient", lambda: client)
+
+    job = SummaryJobRunner().run_for_document(db_session, document.id)
+    assert job.status == "cancelled"
+    # Remote-cancel short-circuits before artifact fetch in this ticket.
+    assert not client.artifact_called
+
+    refreshed = get_job(db_session, job.id)
+    assert refreshed is not None
+    assert refreshed.completed_steps == 0
+    assert refreshed.failed_steps == 0
+    assert refreshed.skipped_steps == len(records)
+
+    steps = list_job_steps(db_session, job.id)
+    assert len(steps) == len(records)
+    assert all(step.status == "skipped" for step in steps)
+    assert all(step.error_code == "job_cancelled" for step in steps)
+    assert all("cancelled" in (step.error_message or "").lower() for step in steps)

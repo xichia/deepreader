@@ -15,6 +15,7 @@ from deepreader.storage.repositories import (
     get_job,
     list_job_steps,
     list_jobs,
+    mark_unfinished_steps_cancelled,
     refresh_job_progress,
     set_job_status,
     set_job_step_status,
@@ -187,11 +188,7 @@ def cancel_job_endpoint(job_id: int, session: Session = Depends(get_session)) ->
                 )
 
     set_job_status(session, job, JOB_STATUS_CANCELLED)
-    for step in job.steps:
-        # No unfinished step should remain pending/running/paused after the
-        # parent job is cancelled; mark each as terminally failed.
-        if step.status in {"pending", "running", "paused"}:
-            set_job_step_status(session, step, JOB_STATUS_FAILED, error_message="Job was cancelled.")
+    mark_unfinished_steps_cancelled(session, job)
     refresh_job_progress(session, job)
     session.commit()
 

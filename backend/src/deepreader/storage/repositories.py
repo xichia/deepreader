@@ -280,6 +280,29 @@ def refresh_job_progress(session: Session, job: Job) -> Job:
     return job
 
 
+def mark_unfinished_steps_cancelled(
+    session: Session,
+    job: Job,
+    *,
+    reason: str = "Job was cancelled.",
+) -> None:
+    """Mark a job's unfinished steps as skipped with error_code='job_cancelled'.
+
+    Used by both the local cancel endpoint and the remote cancel polling path
+    so cancelled-step accounting is consistent. Already-terminal steps
+    (completed/failed/skipped) are preserved untouched.
+    """
+    for step in job.steps:
+        if step.status in {JOB_STATUS_PENDING, JOB_STATUS_RUNNING, JOB_STATUS_PAUSED}:
+            set_job_step_status(
+                session,
+                step,
+                JOB_STATUS_SKIPPED,
+                error_code="job_cancelled",
+                error_message=reason,
+            )
+
+
 def list_jobs(session: Session, document_id: int | None = None) -> list[Job]:
     statement = (
         select(Job)
