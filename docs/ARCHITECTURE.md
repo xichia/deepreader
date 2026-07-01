@@ -35,7 +35,7 @@ The backend summary endpoint is synchronous in both modes. Local summaries run i
 
 - `DocumentList`: upload and select documents.
 - `DocumentRecords`: inspect source records and generated summaries.
-- `JobPanel`: inspect jobs, job steps, attempts, failures, and retry failed steps.
+- `JobPanel`: inspect jobs, job steps, attempts, failures, skipped steps, error codes, and retry failed or cancelled-unfinished steps.
 - `SearchWorkbench`: run retrieval over source text, summaries, local vector-style scores, and fusion.
 - `SearchResults`: inspect ranked results and component scores.
 - `QaWorkbench`: run deterministic extractive QA.
@@ -50,9 +50,21 @@ The backend summary endpoint is synchronous in both modes. Local summaries run i
 5. Stable IDs are derived deterministically from source hash and record position.
 6. Summary runner creates a job and one step per record.
 7. Existing matching summaries are treated as checkpoints.
-8. In opt-in remote mode, the backend submits only records without provider-specific checkpoints, persists the remote job ID and each polled progress snapshot, validates and imports one artifact, and maps compact, sanitized failure details back to its job steps.
+8. In opt-in remote mode, the backend submits only records without provider-specific checkpoints, persists the remote job ID and each polled progress snapshot, validates and imports one artifact, and maps compact, sanitized failure and skipped details back to its job steps.
 9. Search converts records and summaries into retrieval items.
 10. QA consumes retrieval results as evidence packets and returns extractive citations.
+
+## Terminal Step Accounting
+
+Summary job steps track three terminal statuses:
+
+- **completed** — the record was successfully summarised; a `RecordSummary` row exists.
+- **failed** — the step failed (provider error, validation failure, or retry exhaustion).
+- **skipped** — the step was not processed. Two sub-types:
+  - *Cancellation* (`error_code="job_cancelled"`): unfinished steps are marked skipped when a job is cancelled. These are **retryable**.
+  - *Content/data skips* (e.g. `error_code="empty_summary"`): records that were not summarisable (e.g. empty source text) or explicitly skipped by the remote service. These are **not retried**.
+
+The endpoint `POST /jobs/{job_id}/retry-failed` retries both failed steps and cancelled-unfinished skipped steps. Content/data skips and steps with no error code are excluded. Skipped records do not currently persist `RecordSummary` rows.
 
 ## Important Data Contracts
 

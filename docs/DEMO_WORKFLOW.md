@@ -84,7 +84,7 @@ In Processing, open the summary job details. Check:
 - attempts
 - errors, if any
 
-Failed summary steps can be retried through the local retry endpoint.
+Failed or cancelled-unfinished steps can be retried through the local retry endpoint. Content/data skips (e.g. `empty_summary`) are excluded from retry.
 
 ## 7. Search Summaries
 

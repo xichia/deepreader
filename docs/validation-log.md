@@ -1,5 +1,51 @@
 # DeepReader Validation Log
 
+## 2026-07-01 — Retry cancelled skipped summary steps (T5D)
+
+Commit: c80efb0 `Retry cancelled skipped summary steps`
+
+Validated:
+- 108 backend tests passed.
+- Retry selection expanded: `retry_failed_steps` now targets failed steps and skipped steps with `error_code="job_cancelled"`.
+- Content/data skips (e.g. `empty_summary`, no error code) are excluded from retry.
+- No-candidate behavior preserved (job returned unchanged).
+- New focused retry tests added: skipped/job_cancelled retry, non-cancel skip exclusion, mixed-job selection.
+
+## 2026-07-01 — Account cancelled steps as skipped (T5C)
+
+Commit: 1d6a026 `Account cancelled steps as skipped`
+
+Validated:
+- 105 backend tests passed.
+- `mark_unfinished_steps_cancelled` helper maps pending/running/paused steps to skipped/job_cancelled.
+- Local cancel endpoint uses the helper; remote cancel polling path uses the helper and now refreshes progress counters.
+- Terminal steps (completed/failed/skipped) are preserved untouched.
+- T4 cancel/import race guard preserved.
+
+## 2026-07-01 — Map skipped remote records to skipped steps (T5B)
+
+Commit: 5274c49 `Map skipped remote records to skipped steps`
+
+Validated:
+- 103 backend tests passed.
+- Remote artifact skipped records map to `JobStep.status="skipped"` with preserved `error_code` and error message.
+- Skipped records do not persist `RecordSummary` rows.
+- T4 cancel/import race guard intact.
+
+## 2026-07-01 — Add skipped job step accounting foundation (T5A)
+
+Commit: e09dc1b `Add skipped job step accounting foundation`
+
+Validated:
+- 94 backend tests passed.
+- `JobStep.error_code` (String(50), nullable) column added.
+- `Job.skipped_steps` (Integer, default 0) column added.
+- `JOB_STATUS_SKIPPED` constant; `SET_VALID_STATUSES` split so job-level validation rejects `skipped`.
+- `set_job_step_status` accepts `error_code` kwarg with clearing logic.
+- `refresh_job_progress` computes `skipped_steps`.
+- SQLite migration helper extends existing databases.
+- API: `JobStepOut.error_code`, `JobOut.skipped_steps` surfaced.
+
 ## 2026-06-30 — Gemini provider status fix
 
 Commit: e5c21b3 `Constrain Gemini summary statuses`
