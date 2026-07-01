@@ -364,6 +364,11 @@ code {
   color: #b27b12;
 }
 
+.status-pill.skipped {
+  background: #f5f0e8;
+  color: #8a7a5a;
+}
+
 .job-details {
   display: grid;
   gap: 6px;

@@ -121,6 +121,10 @@ function JobPanel({ jobs, isLoading, error, onRefresh }: JobPanelProps) {
           const isExpanded = expandedJobId === job.id;
           const steps = stepsByJobId[job.id] ?? job.steps;
 
+          const hasRetryableSteps = steps.length > 0
+            ? steps.some(s => s.status === "failed" || (s.status === "skipped" && s.error_code === "job_cancelled"))
+            : job.failed_steps > 0;
+
           const isRemote = job.remote_total_records !== undefined && job.remote_total_records !== null && job.remote_total_records > 0;
           const numerator = isRemote ? (job.remote_completed_records ?? 0) : job.completed_steps;
           const denominator = isRemote ? (job.remote_total_records ?? 0) : job.total_steps;
@@ -150,6 +154,7 @@ function JobPanel({ jobs, isLoading, error, onRefresh }: JobPanelProps) {
                     {job.status === "paused" ? "Paused at " : ""}
                     {numerator}/{denominator}
                     {failed ? `, ${failed} failed` : ""}
+                    {job.skipped_steps > 0 ? `, ${job.skipped_steps} skipped` : ""}
                     {` (${percent}%)`}
                   </dd>
                 </div>
@@ -202,7 +207,7 @@ function JobPanel({ jobs, isLoading, error, onRefresh }: JobPanelProps) {
                       >
                         {isExpanded ? "Hide steps" : "Show steps"}
                       </button>
-                      {job.failed_steps > 0 ? (
+                      {hasRetryableSteps ? (
                         <button
                           className="secondary-button"
                           type="button"
