@@ -526,7 +526,7 @@ def test_remote_summary_polling_paused_to_completed(db_session, monkeypatch):
     assert client.calls == 5
 
 
-def test_remote_summary_polling_cancelled_skips_import(db_session, monkeypatch):
+def test_remote_summary_polling_cancelled_attempts_import(db_session, monkeypatch):
     document, records = _create_document_with_records(db_session)
 
     class CancelledRemoteClient:
@@ -558,13 +558,137 @@ def test_remote_summary_polling_cancelled_skips_import(db_session, monkeypatch):
 
     job = SummaryJobRunner().run_for_document(db_session, document.id)
     assert job.status == "cancelled"
-    assert not client.artifact_called
+    assert client.artifact_called
     # Unfinished steps are accounted as skipped (not failed) on cancel.
     steps = list_job_steps(db_session, job.id)
     assert len(steps) > 0
     assert all(step.status == "skipped" for step in steps)
     assert all(step.error_code == "job_cancelled" for step in steps)
     assert all("cancelled" in (step.error_message or "").lower() for step in steps)
+
+
+def test_remote_summary_polling_cancelled_handles_failed_artifact_fetch(db_session, monkeypatch):
+    document, records = _create_document_with_records(db_session)
+
+    class CancelledRemoteClient:
+        def __init__(self):
+            self.submitted_records = []
+        def submit_job(self, document_id, records):
+            self.submitted_records = records
+            return "remote-cancel-2"
+        def get_job_status(self, job_id):
+            return {
+                "status": "cancelled",
+                "completed_records": 0,
+                "failed_records": 0,
+                "total_records": len(self.submitted_records),
+                "stats": {},
+                "error": None,
+            }
+        def get_job_artifact(self, job_id):
+            raise RuntimeError("Service is down")
+
+    client = CancelledRemoteClient()
+    monkeypatch.setenv("DEEPREADER_SUMMARY_BACKEND", "remote")
+    monkeypatch.setenv("DEEPREADER_ALLOW_REMOTE_SUMMARY_SERVICE", "true")
+    monkeypatch.setenv("DEEPREADER_REMOTE_SUMMARY_MAX_POLLS", "5")
+    monkeypatch.setenv("DEEPREADER_REMOTE_SUMMARY_POLL_INTERVAL_SECONDS", "0.001")
+    monkeypatch.setattr(remote_client_module, "RemoteSummaryClient", lambda: client)
+
+    job = SummaryJobRunner().run_for_document(db_session, document.id)
+    assert job.status == "cancelled"
+    steps = list_job_steps(db_session, job.id)
+    assert len(steps) > 0
+    assert all(step.status == "skipped" for step in steps)
+    assert all(step.error_code == "job_cancelled" for step in steps)
+
+
+def test_remote_summary_polling_cancelled_with_partial_artifact(db_session, monkeypatch):
+    from deepreader.storage.repositories import list_document_summaries
+    document, records = _create_document_with_records(db_session, count=3)
+
+    class PartialCancelledRemoteClient:
+        def __init__(self):
+            self.submitted_records = []
+            self.artifact_called = False
+        def submit_job(self, document_id, records):
+            self.submitted_records = records
+            return "remote-partial-cancel-3"
+        def get_job_status(self, job_id):
+            return {
+                "status": "cancelled",
+                "completed_records": 1,
+                "failed_records": 0,
+                "total_records": len(self.submitted_records),
+                "stats": {},
+                "error": None,
+            }
+        def get_job_artifact(self, job_id):
+            self.artifact_called = True
+            # Return partial artifact:
+            # - First record: completed
+            # - Second record: skipped with job_cancelled
+            # - Third record: omitted entirely
+            return [
+                {
+                    "document_id": document.id,
+                    "record_id": records[0].stable_id,
+                    "stable_id": records[0].stable_id,
+                    "source_hash": records[0].source_hash,
+                    "summary_text": "Summary of record 1",
+                    "provider": "mock",
+                    "status": "completed",
+                },
+                {
+                    "document_id": document.id,
+                    "record_id": records[1].stable_id,
+                    "stable_id": records[1].stable_id,
+                    "source_hash": records[1].source_hash,
+                    "status": "skipped",
+                    "error_code": "job_cancelled",
+                    "message": "Cancelled by remote service",
+                }
+            ]
+
+    client = PartialCancelledRemoteClient()
+    monkeypatch.setenv("DEEPREADER_SUMMARY_BACKEND", "remote")
+    monkeypatch.setenv("DEEPREADER_ALLOW_REMOTE_SUMMARY_SERVICE", "true")
+    monkeypatch.setenv("DEEPREADER_REMOTE_SUMMARY_MAX_POLLS", "5")
+    monkeypatch.setenv("DEEPREADER_REMOTE_SUMMARY_POLL_INTERVAL_SECONDS", "0.001")
+    monkeypatch.setattr(remote_client_module, "RemoteSummaryClient", lambda: client)
+
+    job = SummaryJobRunner().run_for_document(db_session, document.id)
+    assert job.status == "cancelled"
+    assert client.artifact_called
+
+    # Verify that the completed summary was imported/persisted
+    summaries = list_document_summaries(db_session, document.id)
+    assert len(summaries) == 1
+    assert summaries[0].record_id == records[0].id
+    assert summaries[0].summary_text == "Summary of record 1"
+
+    # Verify step statuses
+    steps = list_job_steps(db_session, job.id)
+    assert len(steps) == 3
+    # Sort steps by target_id to match record order
+    steps = sorted(steps, key=lambda s: s.target_id)
+
+    # First step should be completed
+    assert steps[0].status == "completed"
+
+    # Second step should be skipped with job_cancelled
+    assert steps[1].status == "skipped"
+    assert steps[1].error_code == "job_cancelled"
+    assert steps[1].error_message == "Cancelled by remote service"
+
+    # Third step (omitted from artifact) should be skipped with job_cancelled
+    assert steps[2].status == "skipped"
+    assert steps[2].error_code == "job_cancelled"
+
+    # Verify job counters
+    assert job.completed_steps == 1
+    assert job.failed_steps == 0
+    assert job.skipped_steps == 2
 
 
 def test_remote_summary_polling_respects_local_cancellation(db_session, monkeypatch):
@@ -816,8 +940,7 @@ def test_remote_summary_cancel_maps_unfinished_to_skipped_job_cancelled(db_sessi
 
     job = SummaryJobRunner().run_for_document(db_session, document.id)
     assert job.status == "cancelled"
-    # Remote-cancel short-circuits before artifact fetch in this ticket.
-    assert not client.artifact_called
+    assert client.artifact_called
 
     refreshed = get_job(db_session, job.id)
     assert refreshed is not None

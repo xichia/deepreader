@@ -266,11 +266,22 @@ class SummaryJobRunner:
             else:
                 raise TimeoutError(f"Remote summary job {remote_job_id} did not finish before the polling timeout.")
 
+            is_remote_cancel = status_data.get("status") == "cancelled"
+
             session.refresh(job)
-            if job.status == "cancelled":
+            if job.status == "cancelled" and not is_remote_cancel:
                 return job
 
-            artifact = client.get_job_artifact(remote_job_id)
+            artifact = []
+            if is_remote_cancel:
+                try:
+                    artifact = client.get_job_artifact(remote_job_id)
+                except Exception as exc:
+                    LOGGER.warning("Failed to fetch partial artifact for cancelled remote job %s: %s", remote_job_id, exc)
+                    return job
+            else:
+                artifact = client.get_job_artifact(remote_job_id)
+
             import_stats = import_summary_artifact(
                 session,
                 job.document_id,
@@ -331,12 +342,21 @@ class SummaryJobRunner:
                     if checkpoint is not None:
                         set_job_step_status(session, step, JOB_STATUS_COMPLETED)
                     else:
-                        set_job_step_status(
-                            session,
-                            step,
-                            JOB_STATUS_FAILED,
-                            error_message="Remote summary artifact did not contain this record.",
-                        )
+                        if job.status == "cancelled" or is_remote_cancel:
+                            set_job_step_status(
+                                session,
+                                step,
+                                JOB_STATUS_SKIPPED,
+                                error_code="job_cancelled",
+                                error_message="Job was cancelled.",
+                            )
+                        else:
+                            set_job_step_status(
+                                session,
+                                step,
+                                JOB_STATUS_FAILED,
+                                error_message="Remote summary artifact did not contain this record.",
+                            )
 
             refresh_job_progress(session, job)
 
@@ -344,11 +364,15 @@ class SummaryJobRunner:
             # artifact import or step finalization, before overwriting status.
             session.refresh(job)
             if job.status == "cancelled":
-                session.rollback()
-                cancelled_job = get_job(session, job.id)
-                if cancelled_job is not None:
-                    return cancelled_job
-                return job
+                if is_remote_cancel:
+                    session.commit()
+                    return job
+                else:
+                    session.rollback()
+                    cancelled_job = get_job(session, job.id)
+                    if cancelled_job is not None:
+                        return cancelled_job
+                    return job
 
             if job.failed_steps or remote_failed or import_stats["failed"]:
                 error_message = f"Remote summary job {remote_job_id} failed."
