@@ -1,5 +1,19 @@
 # DeepReader Validation Log
 
+## 2026-07-01 — Frontend skipped-step display (T5F)
+
+Commit: 36d0b0c `Display skipped summary steps in frontend`
+
+Validated:
+- 109 backend tests passed.
+- Frontend TypeScript typecheck and vite build pass.
+- `JobStep.status` union includes `"skipped"` (removed stale `"cancelled"`).
+- `JobStep.error_code` field added to type.
+- `Job.skipped_steps` field added to type.
+- Skipped pill styling added to CSS.
+- Skipped count shown in job progress text.
+- Retry button visibility uses loaded steps predicate: shown when any step is failed or any step is skipped with `error_code="job_cancelled"`. Falls back to `job.failed_steps > 0` when steps not loaded.
+
 ## 2026-07-01 — Retry cancelled skipped summary steps (T5D)
 
 Commit: c80efb0 `Retry cancelled skipped summary steps`
