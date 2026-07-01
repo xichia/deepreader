@@ -5,7 +5,11 @@ from sqlalchemy import inspect, text
 
 from deepreader.storage.db import build_engine, init_db
 from deepreader.storage.repositories import (
+    JOB_STATUS_CANCELLED,
+    JOB_STATUS_COMPLETED,
     JOB_STATUS_FAILED,
+    JOB_STATUS_PAUSED,
+    JOB_STATUS_RUNNING,
     get_job,
     refresh_job_progress,
     set_job_status,
@@ -378,3 +382,257 @@ def test_jobs_api_cancel_from_paused(client: TestClient, examples_dir: Path, mon
     assert cancel_response.status_code == 200
     assert cancel_response.json()["status"] == "cancelled"
     assert remote_cancel_calls == ["mock-remote-id"]
+
+
+def test_jobs_api_cancel_remote_failure_returns_502(client: TestClient, examples_dir: Path, monkeypatch) -> None:
+    source_path = examples_dir / "simple_manual.txt"
+    ingest_response = client.post(
+        "/documents/ingest/text",
+        files={"file": (source_path.name, source_path.read_bytes(), "text/plain")},
+    )
+    document_id = ingest_response.json()["document"]["id"]
+    job_payload = client.post(f"/documents/{document_id}/summaries/run").json()
+
+    with client.app.state.SessionLocal() as session:
+        job = get_job(session, job_payload["id"])
+        assert job is not None
+        set_job_status(session, job, JOB_STATUS_RUNNING)
+        job.remote_job_id = "mock-remote-id"
+        session.commit()
+
+    import httpx
+
+    class MockRemoteClient:
+        def __init__(self):
+            pass
+        def cancel_job(self, remote_job_id: str):
+            request = httpx.Request("POST", f"http://test/jobs/{remote_job_id}/cancel")
+            exc = httpx.ConnectError("Connection refused", request=request)
+            raise RuntimeError("Remote summary service error: Connection refused") from exc
+
+    from deepreader.summarise import remote_client
+    monkeypatch.setattr(remote_client, "RemoteSummaryClient", MockRemoteClient)
+
+    cancel_response = client.post(f"/jobs/{job_payload['id']}/cancel")
+    assert cancel_response.status_code == 502
+    assert "remote job may still be running" in cancel_response.json()["detail"].lower()
+
+    detail_response = client.get(f"/jobs/{job_payload['id']}")
+    assert detail_response.status_code == 200
+    # Local job must NOT be marked cancelled when the remote cancel failed.
+    assert detail_response.json()["status"] == "running"
+
+
+def test_jobs_api_cancel_remote_404_proceeds_with_local_cancel(client: TestClient, examples_dir: Path, monkeypatch) -> None:
+    source_path = examples_dir / "simple_manual.txt"
+    ingest_response = client.post(
+        "/documents/ingest/text",
+        files={"file": (source_path.name, source_path.read_bytes(), "text/plain")},
+    )
+    document_id = ingest_response.json()["document"]["id"]
+    job_payload = client.post(f"/documents/{document_id}/summaries/run").json()
+
+    with client.app.state.SessionLocal() as session:
+        job = get_job(session, job_payload["id"])
+        assert job is not None
+        set_job_status(session, job, JOB_STATUS_RUNNING)
+        job.remote_job_id = "mock-remote-id"
+        session.commit()
+
+    import httpx
+
+    class MockRemoteClient:
+        def __init__(self):
+            pass
+        def cancel_job(self, remote_job_id: str):
+            request = httpx.Request("POST", f"http://test/jobs/{remote_job_id}/cancel")
+            response = httpx.Response(404, request=request, json={"detail": "Job not found"})
+            exc = httpx.HTTPStatusError("Not Found", request=request, response=response)
+            raise RuntimeError("Remote summary service error: 404") from exc
+
+    from deepreader.summarise import remote_client
+    monkeypatch.setattr(remote_client, "RemoteSummaryClient", MockRemoteClient)
+
+    cancel_response = client.post(f"/jobs/{job_payload['id']}/cancel")
+    assert cancel_response.status_code == 200
+    assert cancel_response.json()["status"] == "cancelled"
+
+
+def test_jobs_api_cancel_remote_success_refreshes_progress(client: TestClient, examples_dir: Path, monkeypatch) -> None:
+    source_path = examples_dir / "simple_manual.txt"
+    ingest_response = client.post(
+        "/documents/ingest/text",
+        files={"file": (source_path.name, source_path.read_bytes(), "text/plain")},
+    )
+    document_id = ingest_response.json()["document"]["id"]
+    job_payload = client.post(f"/documents/{document_id}/summaries/run").json()
+
+    with client.app.state.SessionLocal() as session:
+        job = get_job(session, job_payload["id"])
+        assert job is not None
+        steps = job.steps
+        set_job_status(session, job, JOB_STATUS_RUNNING)
+        set_job_step_status(session, steps[0], JOB_STATUS_COMPLETED)
+        for step in steps[1:]:
+            set_job_step_status(session, step, JOB_STATUS_RUNNING)
+        refresh_job_progress(session, job)
+        job.remote_job_id = "mock-remote-id"
+        session.commit()
+
+    class MockRemoteClient:
+        def __init__(self):
+            pass
+        def cancel_job(self, remote_job_id: str):
+            return {"job_id": remote_job_id, "status": "cancelled"}
+
+    from deepreader.summarise import remote_client
+    monkeypatch.setattr(remote_client, "RemoteSummaryClient", MockRemoteClient)
+
+    cancel_response = client.post(f"/jobs/{job_payload['id']}/cancel")
+    assert cancel_response.status_code == 200
+    payload = cancel_response.json()
+    assert payload["status"] == "cancelled"
+    assert payload["finished_at"] is not None
+    total = payload["total_steps"]
+    assert payload["completed_steps"] == 1
+    assert payload["failed_steps"] == total - 1
+    # Counters reflect all terminal accounting.
+    assert payload["completed_steps"] + payload["failed_steps"] == total
+
+
+def test_jobs_api_cancel_local_running_job_refreshes_progress(client: TestClient, examples_dir: Path) -> None:
+    source_path = examples_dir / "simple_manual.txt"
+    ingest_response = client.post(
+        "/documents/ingest/text",
+        files={"file": (source_path.name, source_path.read_bytes(), "text/plain")},
+    )
+    document_id = ingest_response.json()["document"]["id"]
+    job_payload = client.post(f"/documents/{document_id}/summaries/run").json()
+
+    with client.app.state.SessionLocal() as session:
+        job = get_job(session, job_payload["id"])
+        assert job is not None
+        steps = job.steps
+        set_job_status(session, job, JOB_STATUS_RUNNING)
+        set_job_step_status(session, steps[0], JOB_STATUS_COMPLETED)
+        for step in steps[1:]:
+            set_job_step_status(session, step, JOB_STATUS_RUNNING)
+        refresh_job_progress(session, job)
+        # No remote_job_id: local inline job.
+        session.commit()
+
+    cancel_response = client.post(f"/jobs/{job_payload['id']}/cancel")
+    assert cancel_response.status_code == 200
+    payload = cancel_response.json()
+    assert payload["status"] == "cancelled"
+    assert payload["finished_at"] is not None
+    total = payload["total_steps"]
+    assert payload["completed_steps"] == 1
+    assert payload["failed_steps"] == total - 1
+    assert payload["completed_steps"] + payload["failed_steps"] == total
+
+
+def test_jobs_api_cancel_terminates_paused_steps(client: TestClient, examples_dir: Path) -> None:
+    source_path = examples_dir / "simple_manual.txt"
+    ingest_response = client.post(
+        "/documents/ingest/text",
+        files={"file": (source_path.name, source_path.read_bytes(), "text/plain")},
+    )
+    document_id = ingest_response.json()["document"]["id"]
+    job_payload = client.post(f"/documents/{document_id}/summaries/run").json()
+
+    with client.app.state.SessionLocal() as session:
+        job = get_job(session, job_payload["id"])
+        assert job is not None
+        steps = job.steps
+        # At least one completed, one running, and one paused unfinished step.
+        set_job_status(session, job, JOB_STATUS_PAUSED)
+        set_job_step_status(session, steps[0], JOB_STATUS_COMPLETED)
+        set_job_step_status(session, steps[1], JOB_STATUS_RUNNING)
+        for step in steps[2:]:
+            set_job_step_status(session, step, JOB_STATUS_PAUSED)
+        refresh_job_progress(session, job)
+        # No remote_job_id: local inline job.
+        session.commit()
+
+    cancel_response = client.post(f"/jobs/{job_payload['id']}/cancel")
+    assert cancel_response.status_code == 200
+    payload = cancel_response.json()
+    assert payload["status"] == "cancelled"
+    assert payload["finished_at"] is not None
+
+    total = payload["total_steps"]
+    completed = payload["completed_steps"]
+    failed = payload["failed_steps"]
+    # The previously-completed step stays completed; all previously running or
+    # paused steps must now be terminally failed, with counters refreshed.
+    assert completed == 1
+    assert failed == total - 1
+    assert completed + failed == total
+
+    # Re-fetch steps and assert no unfinished step remains pending/running/paused.
+    steps_response = client.get(f"/jobs/{job_payload['id']}/steps")
+    assert steps_response.status_code == 200
+    step_statuses = {step["status"] for step in steps_response.json()}
+    assert step_statuses <= {"completed", "failed"}
+    assert "paused" not in step_statuses
+    assert "running" not in step_statuses
+    assert "pending" not in step_statuses
+
+
+def test_jobs_api_cancel_already_cancelled_is_idempotent(client: TestClient, examples_dir: Path, monkeypatch) -> None:
+    source_path = examples_dir / "simple_manual.txt"
+    ingest_response = client.post(
+        "/documents/ingest/text",
+        files={"file": (source_path.name, source_path.read_bytes(), "text/plain")},
+    )
+    document_id = ingest_response.json()["document"]["id"]
+    job_payload = client.post(f"/documents/{document_id}/summaries/run").json()
+
+    with client.app.state.SessionLocal() as session:
+        job = get_job(session, job_payload["id"])
+        assert job is not None
+        set_job_status(session, job, JOB_STATUS_CANCELLED)
+        job.remote_job_id = "mock-remote-id"
+        session.commit()
+
+    remote_cancel_calls = []
+
+    class MockRemoteClient:
+        def __init__(self):
+            pass
+        def cancel_job(self, remote_job_id: str):
+            remote_cancel_calls.append(remote_job_id)
+            return {"job_id": remote_job_id, "status": "cancelled"}
+
+    from deepreader.summarise import remote_client
+    monkeypatch.setattr(remote_client, "RemoteSummaryClient", MockRemoteClient)
+
+    first = client.post(f"/jobs/{job_payload['id']}/cancel")
+    assert first.status_code == 200
+    assert first.json()["status"] == "cancelled"
+
+    second = client.post(f"/jobs/{job_payload['id']}/cancel")
+    assert second.status_code == 200
+    assert second.json()["status"] == "cancelled"
+
+    # Remote cancel is never called for an already-cancelled (terminal) job.
+    assert remote_cancel_calls == []
+
+
+def test_jobs_api_cancel_terminal_job_preserves_status(client: TestClient, examples_dir: Path) -> None:
+    source_path = examples_dir / "simple_manual.txt"
+    ingest_response = client.post(
+        "/documents/ingest/text",
+        files={"file": (source_path.name, source_path.read_bytes(), "text/plain")},
+    )
+    document_id = ingest_response.json()["document"]["id"]
+    job_payload = client.post(f"/documents/{document_id}/summaries/run").json()
+
+    # The locally-run job completes inline with no remote_job_id.
+    assert job_payload["status"] == "completed"
+
+    cancel_response = client.post(f"/jobs/{job_payload['id']}/cancel")
+    assert cancel_response.status_code == 200
+    # Terminal status is preserved (cancel is a no-op for terminal jobs).
+    assert cancel_response.json()["status"] == "completed"

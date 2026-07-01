@@ -185,7 +185,7 @@ def set_job_status(
     job.status = status
     job.error_message = error_message
     job.updated_at = utc_now()
-    if status in {JOB_STATUS_COMPLETED, JOB_STATUS_FAILED}:
+    if status in {JOB_STATUS_COMPLETED, JOB_STATUS_FAILED, JOB_STATUS_CANCELLED}:
         job.finished_at = utc_now()
     else:
         job.finished_at = None

@@ -9,7 +9,16 @@ from sqlalchemy.orm import Session
 from deepreader.api.routes_documents import get_session
 from deepreader.summarise.service import SummaryJobRunner
 from deepreader.storage.models import Job, JobStep
-from deepreader.storage.repositories import get_job, list_job_steps, list_jobs
+from deepreader.storage.repositories import (
+    JOB_STATUS_CANCELLED,
+    JOB_STATUS_FAILED,
+    get_job,
+    list_job_steps,
+    list_jobs,
+    refresh_job_progress,
+    set_job_status,
+    set_job_step_status,
+)
 
 router = APIRouter(prefix="/jobs", tags=["jobs"])
 
@@ -144,29 +153,43 @@ def cancel_job_endpoint(job_id: int, session: Session = Depends(get_session)) ->
     if job is None:
         raise HTTPException(status_code=status.HTTP_404_NOT_FOUND, detail="Job not found.")
 
-    if job.status in {"pending", "running", "paused"}:
-        if job.remote_job_id:
-            from deepreader.summarise.remote_client import RemoteSummaryClient
-            try:
-                client = RemoteSummaryClient()
-                client.cancel_job(job.remote_job_id)
-            except Exception as exc:
-                import logging
-                logging.getLogger(__name__).warning("Failed to cancel remote job: %s", exc)
+    if job.status not in {"pending", "running", "paused"}:
+        return job_out(job)
 
-        from deepreader.storage.repositories import utc_now
-        job.status = "cancelled"
-        job.finished_at = utc_now()
-        job.updated_at = utc_now()
+    if job.remote_job_id:
+        import httpx
+        import logging
+        from deepreader.summarise.remote_client import RemoteSummaryClient
 
-        for step in job.steps:
-            if step.status in {"pending", "running"}:
-                step.status = "failed"
-                step.error_message = "Job was cancelled."
-                step.finished_at = utc_now()
-                step.updated_at = utc_now()
+        try:
+            client = RemoteSummaryClient()
+            client.cancel_job(job.remote_job_id)
+        except Exception as exc:
+            cause = exc.__cause__
+            # A 404 from the remote service means the remote job no longer
+            # exists and cannot be consuming quota; treat it as benign.
+            if isinstance(cause, httpx.HTTPStatusError) and cause.response.status_code == 404:
+                logging.getLogger(__name__).info(
+                    "Remote job %s not found during cancel; proceeding with local cancel.",
+                    job.remote_job_id,
+                )
+            else:
+                logging.getLogger(__name__).warning(
+                    "Failed to cancel remote job %s: %s", job.remote_job_id, exc
+                )
+                raise HTTPException(
+                    status_code=status.HTTP_502_BAD_GATEWAY,
+                    detail="Failed to cancel remote summary job; remote job may still be running.",
+                )
 
-        session.commit()
+    set_job_status(session, job, JOB_STATUS_CANCELLED)
+    for step in job.steps:
+        # No unfinished step should remain pending/running/paused after the
+        # parent job is cancelled; mark each as terminally failed.
+        if step.status in {"pending", "running", "paused"}:
+            set_job_step_status(session, step, JOB_STATUS_FAILED, error_message="Job was cancelled.")
+    refresh_job_progress(session, job)
+    session.commit()
 
     return job_out(job)
 
