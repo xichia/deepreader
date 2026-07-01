@@ -606,3 +606,89 @@ def test_remote_summary_polling_respects_local_cancellation(db_session, monkeypa
     job = SummaryJobRunner().run_for_document(db_session, document.id)
     assert job.status == "cancelled"
     assert not client.artifact_called
+
+
+def test_remote_summary_cancel_during_import_preserves_cancelled(db_session, monkeypatch):
+    """Local cancellation during artifact import must not be overwritten by remote completion."""
+    document, records = _create_document_with_records(db_session)
+
+    class CompletedClient:
+        def __init__(self):
+            self.submitted_records = []
+            self.document_id = None
+            self.artifact_called = False
+        def submit_job(self, document_id, records_to_send):
+            self.document_id = document_id
+            self.submitted_records = records_to_send
+            return "remote-race-1"
+        def get_job_status(self, job_id):
+            return {
+                "status": "completed",
+                "completed_records": len(self.submitted_records),
+                "failed_records": 0,
+                "total_records": len(self.submitted_records),
+                "stats": {"provider": "mock"},
+                "error": None,
+            }
+        def get_job_artifact(self, job_id):
+            self.artifact_called = True
+            return [
+                {
+                    "document_id": self.document_id,
+                    "record_id": record["record_id"],
+                    "stable_id": record["stable_id"],
+                    "source_hash": record["source_hash"],
+                    "summary_text": f"Summary for {record['record_id']}",
+                    "summary_style": "one_sentence",
+                    "provider": "mock",
+                    "status": "completed",
+                }
+                for record in self.submitted_records
+            ]
+
+    client = CompletedClient()
+    monkeypatch.setenv("DEEPREADER_SUMMARY_BACKEND", "remote")
+    monkeypatch.setenv("DEEPREADER_ALLOW_REMOTE_SUMMARY_SERVICE", "true")
+    monkeypatch.setenv("DEEPREADER_REMOTE_SUMMARY_MAX_POLLS", "5")
+    monkeypatch.setenv("DEEPREADER_REMOTE_SUMMARY_POLL_INTERVAL_SECONDS", "0.001")
+    monkeypatch.setattr(remote_client_module, "RemoteSummaryClient", lambda: client)
+
+    real_importer = artifact_importer_module.import_summary_artifact
+
+    def racing_importer(session, document_id, artifact, **kwargs):
+        from deepreader.storage.models import Job
+        from deepreader.storage.repositories import (
+            JOB_STATUS_CANCELLED,
+            refresh_job_progress,
+            set_job_status,
+            set_job_step_status,
+        )
+        local_job = (
+            session.query(Job)
+            .filter_by(document_id=document_id)
+            .order_by(Job.id.desc())
+            .first()
+        )
+        if local_job is not None:
+            set_job_status(session, local_job, JOB_STATUS_CANCELLED)
+            for step in local_job.steps:
+                if step.status in {"pending", "running", "paused"}:
+                    set_job_step_status(
+                        session, step, "failed", error_message="Job was cancelled."
+                    )
+            refresh_job_progress(session, local_job)
+            session.commit()
+        return real_importer(session, document_id, artifact, **kwargs)
+
+    monkeypatch.setattr(
+        artifact_importer_module, "import_summary_artifact", racing_importer
+    )
+
+    job = SummaryJobRunner().run_for_document(db_session, document.id)
+
+    assert client.artifact_called
+    assert job.status == "cancelled"
+    assert job.status not in {"completed", "failed"}
+    steps = list_job_steps(db_session, job.id)
+    assert len(steps) > 0
+    assert all(step.status not in {"pending", "running", "paused"} for step in steps)

@@ -320,6 +320,17 @@ class SummaryJobRunner:
                         )
 
             refresh_job_progress(session, job)
+
+            # Re-check for local cancellation that may have occurred during
+            # artifact import or step finalization, before overwriting status.
+            session.refresh(job)
+            if job.status == "cancelled":
+                session.rollback()
+                cancelled_job = get_job(session, job.id)
+                if cancelled_job is not None:
+                    return cancelled_job
+                return job
+
             if job.failed_steps or remote_failed or import_stats["failed"]:
                 error_message = f"Remote summary job {remote_job_id} failed."
                 details = import_stats.get("failure_summary")
