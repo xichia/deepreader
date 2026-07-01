@@ -17,6 +17,7 @@ from deepreader.storage.repositories import (
     JOB_STATUS_COMPLETED,
     JOB_STATUS_FAILED,
     JOB_STATUS_RUNNING,
+    JOB_STATUS_SKIPPED,
     create_job,
     create_job_step,
     create_record_summary,
@@ -301,7 +302,28 @@ class SummaryJobRunner:
                         JOB_STATUS_FAILED,
                         error_message=f"Remote summary failed: {artifact_detail}",
                     )
-                elif record.stable_id in imported_ids or record.stable_id in skipped_ids:
+                elif record.stable_id in skipped_ids:
+                    skip_detail = import_stats["skipped_details_by_record"].get(
+                        record.stable_id, {}
+                    )
+                    skip_error_code = (
+                        skip_detail.get("error_code")
+                        if isinstance(skip_detail, dict)
+                        else None
+                    )
+                    skip_message = (
+                        skip_detail.get("message")
+                        if isinstance(skip_detail, dict)
+                        else None
+                    )
+                    set_job_step_status(
+                        session,
+                        step,
+                        JOB_STATUS_SKIPPED,
+                        error_code=skip_error_code,
+                        error_message=skip_message,
+                    )
+                elif record.stable_id in imported_ids:
                     set_job_step_status(session, step, JOB_STATUS_COMPLETED)
                 else:
                     checkpoint = find_existing_summary_checkpoint(

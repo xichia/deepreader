@@ -692,3 +692,87 @@ def test_remote_summary_cancel_during_import_preserves_cancelled(db_session, mon
     steps = list_job_steps(db_session, job.id)
     assert len(steps) > 0
     assert all(step.status not in {"pending", "running", "paused"} for step in steps)
+
+
+def test_remote_summary_runner_maps_skipped_artifact_to_skipped_step(db_session, monkeypatch):
+    document, records = _create_document_with_records(db_session, count=2)
+
+    class SkippedClient:
+        def __init__(self):
+            self.submitted_records = []
+            self.document_id = None
+            self.artifact_called = False
+        def submit_job(self, document_id, records_to_send):
+            self.document_id = document_id
+            self.submitted_records = records_to_send
+            return "remote-skip-1"
+        def get_job_status(self, job_id):
+            return {
+                "status": "completed",
+                "completed_records": 1,
+                "failed_records": 0,
+                "total_records": len(self.submitted_records),
+                "stats": {"provider": "mock"},
+                "error": None,
+            }
+        def get_job_artifact(self, job_id):
+            self.artifact_called = True
+            artifact = []
+            for index, record in enumerate(self.submitted_records):
+                if index == 0:
+                    artifact.append({
+                        "document_id": self.document_id,
+                        "record_id": record["record_id"],
+                        "stable_id": record["stable_id"],
+                        "source_hash": record["source_hash"],
+                        "summary_text": f"Summary for {record['record_id']}",
+                        "summary_style": "one_sentence",
+                        "provider": "mock",
+                        "status": "completed",
+                    })
+                else:
+                    artifact.append({
+                        "document_id": self.document_id,
+                        "record_id": record["record_id"],
+                        "stable_id": record["stable_id"],
+                        "source_hash": record["source_hash"],
+                        "summary_text": "",
+                        "status": "skipped",
+                        "error_code": "empty_summary",
+                        "message": "Paragraph was empty or unreadable",
+                        "provider": "mock",
+                    })
+            return artifact
+
+    client = SkippedClient()
+    monkeypatch.setenv("DEEPREADER_SUMMARY_BACKEND", "remote")
+    monkeypatch.setenv("DEEPREADER_ALLOW_REMOTE_SUMMARY_SERVICE", "true")
+    monkeypatch.setattr(remote_client_module, "RemoteSummaryClient", lambda: client)
+
+    job = SummaryJobRunner().run_for_document(db_session, document.id)
+    steps = list_job_steps(db_session, job.id)
+    summaries = list_document_summaries(db_session, document.id)
+
+    assert job.status == "completed"
+    assert job.completed_steps == 1
+    assert job.skipped_steps == 1
+    assert job.failed_steps == 0
+
+    completed_step = next(step for step in steps if step.status == "completed")
+    skipped_step = next(step for step in steps if step.status == "skipped")
+    assert skipped_step is not None
+    assert skipped_step.error_code == "empty_summary"
+    assert skipped_step.error_message == "Paragraph was empty or unreadable"
+    assert skipped_step.finished_at is not None
+
+    # No RecordSummary row is persisted for the skipped record.
+    skipped_record = records[1]
+    assert (
+        db_session.query(RecordSummary)
+        .filter_by(record_id=skipped_record.id)
+        .count()
+        == 0
+    )
+    # Exactly one summary is persisted for the completed record.
+    assert len(summaries) == 1
+    assert summaries[0].record_id == records[0].id

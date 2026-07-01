@@ -44,6 +44,7 @@ def import_summary_artifact(
         "errors": [],
         "imported_record_ids": [],
         "skipped_record_ids": [],
+        "skipped_details_by_record": {},
         "failed_record_ids": [],
         "error_code_counts": {},
         "failed_examples": [],
@@ -142,6 +143,21 @@ def import_summary_artifact(
         if artifact_status == "skipped":
             stats["skipped"] += 1
             stats["skipped_record_ids"].append(record_id)
+            skip_message = line.get("message")
+            if not isinstance(skip_message, str) or not skip_message.strip():
+                skip_message = line.get("error")
+            stats["skipped_details_by_record"][record_id] = {
+                "error_code": (
+                    sanitize_diagnostic_text(line.get("error_code"))[:50]
+                    if isinstance(line.get("error_code"), str) and line.get("error_code").strip()
+                    else None
+                ),
+                "message": (
+                    sanitize_diagnostic_text(skip_message)
+                    if isinstance(skip_message, str) and skip_message.strip()
+                    else None
+                ),
+            }
             continue
         if artifact_status != "completed":
             error_code = str(line.get("error_code") or "remote_result_failed")
