@@ -522,3 +522,22 @@ Recommendations:
 
 - OpenStax bounded validation remains deferred.
 - Gemini batch-size escalation remains deferred.
+
+## Tag: v0.9-portfolio-polish (2026-07-02)
+
+Validation scope:
+- Tag target: 5698770 Add portfolio guide and link from README
+- Release type: docs-only portfolio/reviewer polish
+- Added docs/PORTFOLIO_GUIDE.md
+- Linked the guide from README.md
+- Clarified reviewer evaluation path, architectural trade-offs, release history, and honest limitations
+- No backend/frontend runtime code changes
+- No schema changes
+- No live Gemini/provider validation
+- No OpenStax validation
+- No secrets inspected
+
+Remote validation:
+- main pushed to origin
+- v0.9-portfolio-polish pushed to origin
+- Remote annotated tag resolves to commit 5698770
