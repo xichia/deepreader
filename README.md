@@ -1,8 +1,8 @@
 # DeepReader
 
-DeepReader is a local-first AI document intelligence and RAG workbench for turning technical documents into inspectable retrieval evidence. It demonstrates the pieces a reviewer expects in a serious RAG system: document ingestion, deterministic record IDs, source-preserving retrieval, summaries, processing jobs, citations, and evidence inspection.
+> **Best evaluated offline** using the step-by-step [Reviewer Demo Workflow](docs/DEMO_WORKFLOW.md) or the comprehensive [Portfolio & Reviewer Guide](docs/PORTFOLIO_GUIDE.md).
 
-For a structured evaluation checklist, architectural design decisions, and honest project limitations, see the [Portfolio & Reviewer Guide](docs/PORTFOLIO_GUIDE.md).
+DeepReader is a local-first AI document intelligence and RAG workbench for turning technical documents into inspectable retrieval evidence. It demonstrates the components a reviewer expects in a serious RAG system: document ingestion, deterministic record IDs, source-preserving retrieval, summaries, processing jobs, citations, and evidence inspection.
 
 It is intentionally not a chatbot wrapper. The dashboard exposes records, scores, retrieval methods, summaries, job steps, citations, and evidence packets so the retrieval pipeline can be inspected end to end.
 
