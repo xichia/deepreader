@@ -1,5 +1,19 @@
 # DeepReader Validation Log
 
+## Tag: v0.7-search-demo-polish (2026-07-02)
+
+* **Commit:** `08b2bd3` (points to `08b2bd3 Polish reviewer demo narrative`)
+* **Backend Tests:** 111 passed (1 warning)
+* **Frontend Validation:** TypeScript compile and Vite build passed
+* **Completed Scope:**
+  * QA evidence provenance surfacing (T1)
+  * Search result provenance display polish (T2)
+  * Reviewer demo narrative and README polish (T3)
+* **Explicitly Deferred:**
+  * Skipped `RecordSummary` persistence remains intentionally deferred.
+  * Live Gemini/provider validation remains deferred.
+  * OpenStax validation remains deferred.
+
 ## 2026-07-02 — Search result provenance display polish (v0.7 T2)
 
 Commit: 3842961 `Polish search result provenance display`
