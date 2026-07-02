@@ -1,5 +1,21 @@
 # DeepReader Validation Log
 
+## Tag: v0.6-cancel-retry-hardening (2026-07-02)
+
+* **Commit:** `8dde2b7` (points to `8dde2b7 Document remote cancel artifact validation`)
+* **Backend Tests:** 111 passed
+* **Frontend Validation:** TypeScript compile and Vite build passed
+* **Completed Scope:**
+  * Skipped job-step accounting
+  * Skipped/error_code API exposure
+  * Retry of failed plus skipped/job_cancelled steps
+  * Frontend skipped-step display
+  * Remote-cancel partial artifact import
+  * Validation-log updates
+* **Explicitly Deferred:**
+  * Skipped `RecordSummary` persistence remains intentionally not implemented (preventing search/QA index pollution).
+  * Live Gemini/OpenStax validation remains deferred unless explicitly approved.
+
 ## 2026-07-02 — Remote-cancel partial artifact import
 
 Commit: 82a3409 `Import partial remote cancel artifacts`
