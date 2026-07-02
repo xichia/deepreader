@@ -1,5 +1,19 @@
 # DeepReader Validation Log
 
+## 2026-07-02 — Remote-cancel partial artifact import
+
+Commit: 82a3409 `Import partial remote cancel artifacts`
+
+Validated:
+- 111 backend tests passed (including 24 in `test_remote_summary.py`).
+- Remote terminal `cancelled` jobs now attempt partial artifact fetch/import.
+- Completed records from partial artifacts are imported successfully into `RecordSummary`.
+- Skipped/job_cancelled records map to skipped/job_cancelled steps.
+- Missing/unfinished steps in the remote-cancel path become skipped/job_cancelled.
+- Local job status remains `cancelled`.
+- Concurrent local cancellation guard remains separate and still prevents finalization overwrite (uses rollback).
+- Skipped `RecordSummary` persistence was not implemented.
+
 ## 2026-07-01 — Frontend skipped-step display (T5F)
 
 Commit: 36d0b0c `Display skipped summary steps in frontend`
