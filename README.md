@@ -44,6 +44,47 @@ It is intentionally not a chatbot wrapper. The dashboard exposes records, scores
 
 No API keys are required for the default workflow. The local summariser, mock paragraph provider, and QA flow are deterministic; the optional Gemini paragraph provider is disabled unless both provider selection and provider-call opt-in are set.
 
+## How to evaluate this project
+
+DeepReader is a portfolio/demo project built to be inspected rather than trusted. The fastest way to evaluate it is to clone it, run the local demo, and check that every pipeline stage is traceable.
+
+### What to inspect in the UI
+
+- **Ingest + records:** upload `examples/simple_manual.txt`. Confirm stable IDs, `order_index`, section titles, and unchanged source text.
+- **Search provenance:** run `what causes low flow?`. Confirm each result shows retrieval method, aggregate score, component scores, record ID/stable ID, and source location (section/page/chapter). Missing fields fall back to `Not reported`; a zero-results query renders a styled empty state.
+- **QA evidence provenance:** ask `What causes low flow?`. Confirm the Evidence provenance panel separates *used in answer* vs *available only*, shows each packet's retrieval method, scores, record ID, and location.
+- **Job lifecycle:** generate summaries and open the job. Confirm completed/failed/skipped counts, `error_code`, attempts, and the retry button for failed or cancelled-unfinished steps.
+
+### What backend reliability work is covered by tests
+
+- Skipped-step accounting and `error_code` exposure (`v0.6-cancel-retry-hardening` tag).
+- Retry of failed *and* skipped/`job_cancelled` steps (content/data skips like `empty_summary` excluded).
+- Remote-cancel partial artifact import (completed records imported; unfinished steps marked skipped/`job_cancelled`).
+- Concurrent local cancellation guard (rollback-based finalization-overwrite prevention).
+- Upload filename/extension safety, search, QA evidence packets, and answer persistence.
+
+Run `make test` for the full backend suite.
+
+### What is intentionally mocked/deferred
+
+- The optional paragraph-summary-service defaults to a deterministic `mock` provider; the Gemini path is validation-only and disabled unless explicitly opted in.
+- Local summaries are deterministic-extractive, not LLM summaries.
+- Local vector-style retrieval is a lexical approximation, **not** embeddings/semantic search.
+- QA is extractive and deterministic, not answer generation from a model.
+- **Provider (Gemini) and OpenStax validation remain deferred** unless explicitly approved; the default demo runs fully offline.
+
+### Where to find validation logs and the demo workflow
+
+- Step-by-step reviewer script with "what this demonstrates" commentary: [docs/DEMO_WORKFLOW.md](docs/DEMO_WORKFLOW.md).
+- Proven-results-only validation history: [docs/validation-log.md](docs/validation-log.md).
+- Module/data-flow overview: [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+- Planning notes and deferred scaling: [docs/project-log/feature-notes.md](docs/project-log/feature-notes.md).
+
+### Current milestone / polish work
+
+- Current tag: `v0.6-cancel-retry-hardening` (lifecycle hardening: skipped steps, cancel, retry, remote-cancel partial artifact import).
+- Current v0.7 polish (`search-demo-polish` direction): QA evidence provenance surfacing (T1) and search result provenance/component-score display (T2), both complete and documented.
+
 ## Architecture
 
 - `backend/src/deepreader/api`: FastAPI routes and response schemas.
