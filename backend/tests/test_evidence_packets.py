@@ -26,3 +26,6 @@ def test_evidence_packet_preserves_stable_source_fields() -> None:
     assert packet.section_title == "Alarm Conditions"
     assert packet.chapter_index == 2
     assert packet.source_hash == "abc"
+    assert packet.retrieval_method == "bm25_summary_text"
+    assert packet.score == 1.25
+    assert packet.component_scores == {"bm25_summary_text": 1.0}

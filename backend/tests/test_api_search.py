@@ -21,6 +21,9 @@ def test_search_api_returns_inspectable_bm25_results(client: TestClient, example
     assert payload["query"] == "bearing wear"
     assert payload["results"]
     assert payload["results"][0]["retrieval_method"] == "bm25_source_text"
+    assert payload["results"][0]["component_scores"] == {
+        "bm25_source_text": payload["results"][0]["score"]
+    }
     assert payload["results"][0]["summary"] is None
     assert "bearing wear" in payload["results"][0]["source_text"].lower()
     assert payload["results"][0]["stable_id"].startswith("doc_")

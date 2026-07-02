@@ -702,6 +702,7 @@ code {
 
 .citation-inspector,
 .citation-list,
+.evidence-panel,
 .evidence-list {
   min-width: 0;
 }
@@ -748,6 +749,23 @@ code {
   overflow: auto;
 }
 
+.evidence-heading {
+  margin-bottom: 8px;
+}
+
+.evidence-heading h3 {
+  margin: 0;
+  font-size: 15px;
+}
+
+.evidence-card.used-evidence {
+  border-left: 4px solid #397761;
+}
+
+.evidence-card.available-evidence {
+  border-left: 4px solid #c8c5bc;
+}
+
 .evidence-title {
   grid-template-columns: 34px minmax(0, 1fr);
   align-items: center;
@@ -763,6 +781,81 @@ code {
   color: #ffffff;
   font-size: 12px;
   font-weight: 800;
+}
+
+.evidence-provenance-row {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 8px;
+  margin-top: 10px;
+}
+
+.evidence-usage,
+.retrieval-method {
+  border-radius: 999px;
+  padding: 4px 8px;
+  font-size: 11px;
+  font-weight: 800;
+}
+
+.evidence-usage.used {
+  background: #e7f4ed;
+  color: #245c43;
+}
+
+.evidence-usage.available {
+  background: #f1f0eb;
+  color: #61605b;
+}
+
+.retrieval-method {
+  overflow: hidden;
+  background: #eef2ef;
+  color: #3f514a;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.evidence-details {
+  margin-top: 10px;
+}
+
+.component-scores {
+  margin-top: 12px;
+}
+
+.component-score-list {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+  margin: 6px 0 0;
+}
+
+.component-score-list div {
+  display: flex;
+  gap: 6px;
+  border-radius: 6px;
+  background: #f3f4ef;
+  padding: 5px 7px;
+  font-size: 11px;
+}
+
+.component-score-list dt {
+  color: #596059;
+}
+
+.component-score-list dd {
+  margin: 0;
+  color: #272823;
+  font-variant-numeric: tabular-nums;
+  font-weight: 800;
+}
+
+.provenance-fallback {
+  margin: 6px 0 0;
+  color: #737870;
+  font-size: 12px;
 }
 
 .qa-controls {

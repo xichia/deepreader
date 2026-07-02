@@ -35,11 +35,23 @@ def test_qa_api_returns_answer_citations_and_evidence(client: TestClient, exampl
     assert payload["retrieval_settings"]["use_local_vector"] is True
     assert all(citation["stable_id"] for citation in payload["citations"])
     assert all("quoted_text" in citation for citation in payload["citations"])
-    
+
+    used_record_ids = {evidence["record_id"] for evidence in payload["used_evidence"]}
+    unused_record_ids = {evidence["record_id"] for evidence in payload["unused_evidence"]}
+    all_record_ids = {evidence["record_id"] for evidence in payload["evidence"]}
+    assert used_record_ids
+    assert used_record_ids.isdisjoint(unused_record_ids)
+    assert used_record_ids | unused_record_ids == all_record_ids
+
     for evidence in payload["evidence"]:
         assert evidence["source_text"]
-        # Ensure we are returning source text
-        assert "source_text" in evidence
+        assert evidence["retrieval_method"] == "fused"
+        assert evidence["component_scores"]
+        assert all(isinstance(score, float) for score in evidence["component_scores"].values())
+
+    for evidence in payload["used_evidence"] + payload["unused_evidence"]:
+        assert evidence["retrieval_method"]
+        assert isinstance(evidence["component_scores"], dict)
 
 
 def test_qa_api_rejects_disabled_retrieval_targets(client: TestClient) -> None:

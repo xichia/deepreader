@@ -174,6 +174,7 @@ function QaWorkbench({ documents, selectedDocumentId }: QaWorkbenchProps) {
 
           <EvidencePanel
             evidence={response.evidence}
+            usedEvidence={response.used_evidence}
             selectedStableId={selectedStableId}
             onSelect={setSelectedStableId}
           />
