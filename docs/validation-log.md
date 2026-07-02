@@ -1,5 +1,26 @@
 # DeepReader Validation Log
 
+## 2026-07-02 — QA evidence provenance surfacing (v0.7 T1)
+
+Commit: 3e8bfe9 `Surface QA evidence provenance`
+
+Behavior:
+- QA evidence cards show used/available status, retrieval method, aggregate retrieval score, component scores, record ID, and source location.
+- Implemented fallbacks for missing method, scores, and location.
+- Used/available classification leverages existing `used_evidence` and `unused_evidence` response semantics.
+- Frontend classification uses compound `record_id:retrieval_method` keys to prevent false used labels across duplicate record IDs.
+
+Validated:
+- 7 focused backend tests passed (`test_qa_api.py`, `test_evidence_packets.py`, `test_api_search.py`, `test_answer_storage.py`).
+- 111 full backend suite tests passed.
+- Frontend `npm run build` passed.
+
+Notes:
+- No backend API fields were added.
+- No schema migration was required.
+- Skipped `RecordSummary` persistence was not affected.
+- No live provider or OpenStax validation was executed.
+
 ## Tag: v0.6-cancel-retry-hardening (2026-07-02)
 
 * **Commit:** `8dde2b7` (points to `8dde2b7 Document remote cancel artifact validation`)
