@@ -1,5 +1,25 @@
 # DeepReader Validation Log
 
+## 2026-07-02 — Search result provenance display polish (v0.7 T2)
+
+Commit: 3842961 `Polish search result provenance display`
+
+Behavior:
+- Search results now show retrieval method, aggregate score, and component scores in readable chips/list form instead of raw JSON.
+- Displays record ID/stable ID and source location from section/page/chapter metadata when available.
+- Implements fallbacks for missing method, score, component scores, and location.
+- Zero-results empty state explains that no matching records were found and suggests adjusting query/scope/search targets.
+
+Validated:
+- Frontend `npm run build` passed.
+
+Notes:
+- Frontend-only change.
+- No backend API fields were added.
+- No schema migration was required.
+- Skipped `RecordSummary` persistence was not affected.
+- No live provider or OpenStax validation was executed.
+
 ## 2026-07-02 — QA evidence provenance surfacing (v0.7 T1)
 
 Commit: 3e8bfe9 `Surface QA evidence provenance`
