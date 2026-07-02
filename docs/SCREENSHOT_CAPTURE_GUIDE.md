@@ -38,19 +38,14 @@ pnpm dev
 
 ## 3. Manual Screenshot Steps
 
-### A. Search Results Provenance Display
-- **Target File:** `docs/screenshots/search-results.png`
+### A. Demo Workbench Composite View
+- **Target File:** `docs/screenshots/demo-workbench.png`
+- **Wording / Warding:** Do not crop or split this composite screenshot into separate files. It must capture the jobs panel, the records/summaries panel, and the search results panel together in a single browser window.
 - **Actions:**
-  1. Click on the **Search** tab.
-  2. Type the query: `what causes low flow?` and submit.
-  3. Ensure that the results display:
-     - Retrieval method (e.g. `bm25_source_text` or `bm25_summary_text`).
-     - Aggregate search score.
-     - Component score chips (clearly separated, readable CSS pills).
-     - Record ID / Stable ID.
-     - Source location metadata (e.g. `section_title / page_number`).
-  4. Crop your browser window to exclude browser borders, tabs, or address bar.
-  5. Capture the search results viewport and save it as `docs/screenshots/search-results.png`.
+  1. Arrange the dashboard so that the job steps/status list, selected record summaries, and search results (for query `what causes low flow?` showing scores and chips) are visible in one view.
+  2. Ensure search results display retrieval methods, aggregate scores, location metadata, and score chips clearly.
+  3. Capture the full browser window/workbench viewport and save as `docs/screenshots/demo-workbench.png`.
+- **Note:** Individual job lifecycle or separate records/search files are no longer separate targets in this pass.
 
 ### B. QA Citations and Evidence Provenance
 - **Target File:** `docs/screenshots/qa-citations.png`
@@ -63,22 +58,6 @@ pnpm dev
      - Individual retrieval methods, scores, record IDs, and location metadata.
   5. Crop to focus on the QA answer area, cited text, and the Evidence provenance side-by-side.
   6. Capture and save as `docs/screenshots/qa-citations.png`.
-
-### C. Job Step Lifecycle
-- **Target File:** `docs/screenshots/jobs.png`
-- **Actions:**
-  1. Click on the **Processing** or **Jobs** section.
-  2. Locate the summary generation job details.
-  3. Ensure the view displays the job progress, status, individual job steps, targets (`stable_id`), attempts count, and any error status pills.
-  4. Capture the panel and save as `docs/screenshots/jobs.png`.
-- **Fallback Rule:** If generating job failure states (e.g. cancelled, skipped) is too time-consuming or risky to recreate manually without active scheduler disruption, **do not capture/overwrite this file**. Keep the existing `jobs.png` unchanged.
-
-### D. Records and Summaries (Optional)
-- **Target File:** `docs/screenshots/records-summaries.png`
-- **Actions:**
-  1. Navigate to the main library and select the document.
-  2. Adjust viewport width so that ground-truth source text and generated local summaries are clearly visible side-by-side in the Records list.
-  3. Capture the viewport and save as `docs/screenshots/records-summaries.png`.
 
 ---
 

@@ -6,25 +6,13 @@ It is intentionally not a chatbot wrapper. The dashboard exposes records, scores
 
 ## Visual Walkthrough
 
-![DeepReader dashboard showing upload controls and document records](docs/screenshots/dashboard.png)
+![DeepReader demo workbench showing jobs, record summaries, and search results](docs/screenshots/demo-workbench.png)
 
-*Document upload and records: ingest local `.txt` or `.epub` files, select documents, and inspect stable record IDs.*
-
-![DeepReader records panel showing generated summaries](docs/screenshots/records-summaries.png)
-
-*Generated summaries: deterministic local summaries are displayed beside preserved source text.*
-
-![DeepReader search results showing retrieval details](docs/screenshots/search-results.png)
-
-*Search/retrieval results: compare ranked records with scores, retrieval methods, metadata, summaries, and source text.*
+*Demo workbench: ingest local documents, inspect stable record IDs/ground-truth source text, track summary processing job steps, and search records using score chips and location metadata.*
 
 ![DeepReader QA panel showing citations and evidence](docs/screenshots/qa-citations.png)
 
-*Extractive QA with citations/evidence: answers remain tied to cited records and inspectable evidence packets.*
-
-![DeepReader jobs panel showing processing steps](docs/screenshots/jobs.png)
-
-*Job tracking and steps: summary processing jobs expose status, progress, target stable IDs, attempts, and errors.*
+*Extractive QA with citations/evidence: answers remain tied to cited records and inspectable evidence packets (separating used vs. available evidence).*
 
 ## Core Features
 
