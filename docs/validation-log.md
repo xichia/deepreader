@@ -1,5 +1,20 @@
 # DeepReader Validation Log
 
+## Tag: v0.8-demo-assets-polish (2026-07-02)
+
+* **Commit:** `c496a0b` (points to `c496a0b Align screenshot guide and README with demo screenshot assets`)
+* **Backend Tests:** N/A (Docs/assets-only change, no runtime backend code modified)
+* **Frontend Validation:** N/A (Docs/assets-only change, no runtime frontend code modified)
+* **Completed Scope:**
+  * Added manual screenshot capture guide (`docs/SCREENSHOT_CAPTURE_GUIDE.md`)
+  * Replaced README visual walkthrough with one composite demo workbench image (`demo-workbench.png`) and one QA evidence/citations image (`qa-citations.png`)
+  * Aligned screenshot guide with the new two-image asset strategy
+  * Removed legacy/stale screenshot files (`dashboard.png`, `records-summaries.png`, `search-results.png`, `jobs.png`)
+* **Explicitly Deferred / Not Run:**
+  * No backend/frontend runtime code was changed.
+  * Live Gemini/provider validation remains deferred.
+  * OpenStax validation remains deferred.
+
 ## Tag: v0.7-search-demo-polish (2026-07-02)
 
 * **Commit:** `08b2bd3` (points to `08b2bd3 Polish reviewer demo narrative`)
